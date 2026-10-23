@@ -46,7 +46,7 @@
       "batchgen_kernels": "0.5.0+sm100",
       "libucx-cu13": "1.22.0"
     },
-    "dataset_manifest_sha256": null,
+    "dataset_manifest_sha256": "8dc0c57dbe130c496b85cbe5563ca71df7d58638d7ad9ae5b7044d9e3945baa7",
     "formal_request_count": 6000,
     "formal_request_count_note": "Paper only says 6K; no bound artifact establishing 6000 versus 6144 was recovered. 6000, K=1024, seed20261023 and explicit with-replacement sampling are campaign conventions; no claim to recover original request list.",
     "smoke_request_counts": [
@@ -172,6 +172,56 @@
       "cuda_graph": false,
       "prefix_cache": false,
       "qualification": "explicit eager correctness migration, not performance-qualified"
+    },
+    "workload_manifest_path": "/home/admin/batchgen-r1-repro-20261023/workload-formal-6000-v1/manifest.json",
+    "workload_sampling": {
+      "eligible_samples": 2212,
+      "unique_selected_samples": 2046,
+      "requests_per_profile": 6000,
+      "with_replacement": true,
+      "seed": 20261023,
+      "runtime_tokenization_and_output_length_verified": false
+    },
+    "correctness_status": {
+      "formal_performance_released": false,
+      "full_model_loaded": false,
+      "attention_layer_matrix": {
+        "layers": [
+          0,
+          3,
+          42
+        ],
+        "contexts": [
+          "small",
+          2048,
+          8192
+        ],
+        "passed": 1,
+        "failed": 8,
+        "original_gates_preserved": true,
+        "diagnosis": "Small accumulation differences amplified by subsequent discrete FP8 quantization; long-position YaRN operation-order differences also observed. Not a full-model correctness pass."
+      },
+      "native_kv_migration": {
+        "status": "passed",
+        "nodes": 2,
+        "ranks": 2,
+        "layers": 61,
+        "tokens": [
+          1,
+          65,
+          2048,
+          8192
+        ],
+        "transport": "actual BatchGenWorker Gloo CPU migration",
+        "exact_bf16_roundtrip": true,
+        "trajectory_and_page_release": true,
+        "report": "kv-migration-v6.json",
+        "excludes": [
+          "scheduler",
+          "16-rank EP",
+          "model inference"
+        ]
+      }
     }
   },
   "operational_rules": {

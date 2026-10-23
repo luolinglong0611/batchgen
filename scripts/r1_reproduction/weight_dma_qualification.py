@@ -70,7 +70,7 @@ def stop_worker(worker):
 
 def worker_main(settings):
     report = {'status': 'failed', 'pid': os.getpid(), 'owner_pid': settings['owner_pid'],
-              'scope': SCOPE, 'tensors': []}
+              'scope': settings.get('scope', SCOPE), 'tensors': []}
     storage = None
     tensors = tensor = gpu = returned = raw = host_raw = None
     stream = None
@@ -99,6 +99,12 @@ def worker_main(settings):
         storage.Init(settings['weight_name'], settings['size'], settings['metadata_name'],
                      False, False, settings['owner_pid'], settings['weights_fd'], settings['metadata_fd'])
         report['attach_and_register_seconds'] = time.monotonic() - init_start
+        if settings.get('registration_barrier') is not None:
+            print(json.dumps({'event': 'host_registered', 'physical_gpu': settings['physical_gpu'],
+                              'bytes': settings['size']}), flush=True)
+            # Keep all native registrations alive together before testing DMA.
+            settings['registration_barrier'].wait(timeout=settings['barrier_timeout'])
+            report['simultaneous_registration_barrier_passed'] = True
         tensors = storage.get_tensor(MODULE)
         metadata = settings['state_dict']
         if set(tensors) != set(metadata):
