@@ -1,0 +1,23 @@
+{
+  "scope": "Selected installed source files read from node1 baseline-v8; not a full installed-tree or upstream Git SHA verification",
+  "sglang_version": "0.5.5.post3",
+  "observed_hostname": "serverless-010066009166.wm226",
+  "files": {
+    "sglang/srt/server_args.py": "34dfebfe793e7e7409ee69a71c77d3550039e20ed71bff0e954e23c0042bdfdf",
+    "sglang/srt/model_loader/loader.py": "52f4d4ecfda2115ff585783b85942a800d43dbb812794e78f9c29411eb65c334",
+    "sglang/srt/model_loader/weight_utils.py": "a39294d2ebce5031873b577550df38e6b986a045873be63579146fe064e1f2a4",
+    "sglang/srt/model_loader/utils.py": "b786811fefd9884882923c8052cef54afdf9f3d0e5928a871faf546a35c07c6f",
+    "sglang/srt/model_executor/model_runner.py": "c16d0d2b133e0e1efd7d338034a7908e662bbadab1dcef418418c08c28910c45",
+    "sglang/srt/models/deepseek_v2.py": "620cd09545404fd62952e2239b905cfb26bc7565b361ac76bdf8f6d89ca80f49",
+    "sglang/srt/layers/quantization/fp8.py": "31faac58174b3ee8298504c140e00647f502db2205b7c0e6156a8c0a407595d2",
+    "sglang/srt/layers/quantization/fp8_utils.py": "58b328cd340591eeca404a24a223030c32548f576b285e06c41b768f8dd1b382",
+    "sglang/srt/layers/attention/trtllm_mla_backend.py": "ffe156f30a14228a648f36eeecc43810392cb62ec748c24c8d7f2b14fdcbc65e",
+    "sglang/srt/environ.py": "8d0041733281c2b7022dddb2371ab2c769fd705c0e23a3f62901bdf26abe942d",
+    "flashinfer/gemm.py": "e73a2a2972108f667066fb510cbfacfed4a62f0b88afd98fb83dc1a1f16f4ed7",
+    "flashinfer/fused_moe/core.py": "30ca158b8994f08c16b9b06c5d89ec61f5bb5ff69fb72bb90b2020cbf1118169",
+    "flashinfer/data/csrc/trtllm_fused_moe_kernel_launcher.cu": "ce6e76c49676020781d685d28ad3fefceb857a779c247d8547a1289e810f114d",
+    "flashinfer/data/csrc/trtllm_fused_moe_runner.cu": "480f32507a52bb7963922abc9d7fe122d8b16811eeffc12fc41ec5b6c411e953",
+    "sglang/srt/layers/deep_gemm_wrapper/configurer.py": "be4301359c7746aba412dc4c5006d37ca2628b73035cb06cf37665b20b713625",
+    "sglang/srt/layers/quantization/fp8_kernel.py": "b98500e0b3283e8001ed088ac9af3d0bf06c0c552a2da9ae8296a230fa9e6f93"
+  }
+}
