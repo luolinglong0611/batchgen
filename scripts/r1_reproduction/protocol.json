@@ -47,8 +47,8 @@
       "libucx-cu13": "1.22.0"
     },
     "dataset_manifest_sha256": null,
-    "formal_request_count": null,
-    "formal_request_count_note": "Resolve 6K as 6000 or 6144 from original artifacts; document explicitly if unavailable",
+    "formal_request_count": 6000,
+    "formal_request_count_note": "Paper only says 6K; no bound artifact establishing 6000 versus 6144 was recovered. 6000, K=1024, seed20261023 and explicit with-replacement sampling are campaign conventions; no claim to recover original request list.",
     "smoke_request_counts": [
       1,
       16
@@ -63,18 +63,21 @@
     ],
     "secondary_baseline": "vllm",
     "warm_repetitions_min": 3,
-    "primary_metric": "wall time from submission start through all requests completed",
+    "primary_metric": "Wall time from first network submission attempt until all response bodies are fully received; parsing/validation excluded. All requests eligible at once on both systems.",
     "include_in_primary_timing": [
       "submission",
+      "upload",
       "queueing",
       "prefill",
-      "decode"
+      "decode",
+      "response_transfer"
     ],
     "exclude_from_primary_timing": [
       "model download",
       "model load",
       "initial compilation",
-      "warmup"
+      "warmup",
+      "offline_response_parsing_and_validation"
     ],
     "required_recording": [
       "actual input/output tokens",
@@ -157,7 +160,19 @@
       "Omit all speculative and draft-model arguments.",
       "65536 prefill chunks are divided by DP16, giving 4096 tokens per DP rank. Tune with graph sizes/memory fraction before formal comparison.",
       "EP1 TP16 is initial paper-style baseline; EP16 is a separate enhanced comparison."
-    ]
+    ],
+    "baseline_submission_mode": "async-burst; connector and process FD capacity cover the full request count; closed-loop mode is tuning only",
+    "batchgen_submission_mode": "one batch file; include upload through complete result download; create_to_results_seconds is secondary",
+    "runtime_selection": {
+      "BATCHGEN_R1_SM103_EXPERIMENTAL": "1",
+      "BATCHGEN_R1_SM103_ATTENTION": "triton_precision",
+      "DISABLE_MMA_V5": "1",
+      "TORCH_CUDA_CHANNEL": "cu130",
+      "BATCHGEN_W8A16_DEQUANT": "0",
+      "cuda_graph": false,
+      "prefix_cache": false,
+      "qualification": "explicit eager correctness migration, not performance-qualified"
+    }
   },
   "operational_rules": {
     "remote_execution": "allocated containers only",
@@ -279,7 +294,10 @@
     "jsonl_task_files": 34,
     "templates_revision": "2e00731f8d0bff23dc4325161044d0ed8af94c1e",
     "templates_sha256": "56d22ad4f382169c2b8a11ff4c982a4a1bea096c8152b0f0b85b64686b157c30",
-    "workload_generated": false
+    "workload_generated": true,
+    "workload_scope": "16 unique samples for smoke, both exact-length profiles; formal6000 with-replacement workload generation in progress",
+    "smoke_manifest_sha256": "e25a61db23fd217f89bbc482aa27db5b5cd96a0abe4ef6b65279e8bd306e4063",
+    "eligible_samples": 2212
   },
   "native_loader_qualification": {
     "status": "passed",
@@ -295,5 +313,51 @@
     "passed": 46,
     "subtests_passed": 9,
     "report": "cpu-tests-v4.log"
+  },
+  "native_model_qualification": {
+    "status": "passed",
+    "node": "node1",
+    "reports": [
+      "modeling-import-gate-v4.json",
+      "modeling-skeleton-v1.json"
+    ],
+    "imports": [
+      "modeling",
+      "PSM",
+      "initializer",
+      "worker"
+    ],
+    "legacy_modules_loaded": [],
+    "gate_expert_ids_equal": true,
+    "gate_max_abs_weight_error": 5.960464477539063e-08,
+    "skeleton_layers": 61,
+    "empty_large_weights": 45034,
+    "logical_large_parameter_elements": 670918967296,
+    "process_peak_rss_bytes": 1833721856,
+    "unique_cuda_buffers_bytes": 83893888,
+    "full_model_weights_loaded": false,
+    "full_forward_executed": false,
+    "prior_failure": "v3 gate test omitted CUDA current-device selection; corrected test only, retained failure evidence"
+  },
+  "host_kv_qualification": {
+    "status": "passed",
+    "nodes": [
+      "node0",
+      "node1"
+    ],
+    "report": "host-kv-v1.json",
+    "layers": 61,
+    "head_dim": 576,
+    "page_tokens": 64,
+    "sequence_lengths": [
+      1,
+      64,
+      65,
+      129
+    ],
+    "offload_D2H": "exact BF16",
+    "reload_H2D": "exact BF16",
+    "cross_node_migration_tested": false,
+    "scope": "actual native worker view, small host page pool, single GPU per node"
   }
 }

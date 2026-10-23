@@ -386,6 +386,43 @@ def _resolve_model_type(model: str) -> str:
     return model_type
 
 
+def _check_r1_sm103_runtime(server_args: object) -> RuntimeContract:
+    """Check the explicitly selected R1 precision migration before allocation."""
+    if getattr(server_args, "enable_cuda_graph", False) or getattr(
+        server_args, "enable_prefix_cache", False
+    ):
+        raise RuntimePreflightError(
+            "R1 SM103 triton_precision is eager-only; CUDA graphs and prefix-cache reuse are unsupported"
+        )
+    dispatch = _import_required(
+        "batchgen.models.deepseek.deepseekv3.kernel_dispatch", origin=_ORIGIN_BATCHGEN
+    )
+    try:
+        dispatch.validate_sm103_environment()
+    except (AttributeError, RuntimeError) as exc:
+        raise RuntimePreflightError(f"R1 SM103 runtime selection failed: {exc}") from exc
+    entries = {
+        "batchgen.attention.mla.sm103_backend": (
+            "mla_prefill_sm103_w8a16", "mla_prefill_sm103_w8a16_prepacked",
+            "mla_decoding_sm103_bf16_with_pagekv",
+        ),
+        "batchgen.attention.mla.triton_precision": ("varlen_prefill", "paged_mla_decode"),
+    }
+    for name, entrypoints in entries.items():
+        module = _import_required(name, origin=_ORIGIN_BATCHGEN)
+        for entrypoint in entrypoints:
+            if not callable(getattr(module, entrypoint, None)):
+                raise RuntimePreflightError(f"{name} has no {entrypoint}()")
+    logger.info(
+        "[runtime-preflight] r1_sm103_attention=triton_precision mode=eager_correctness "
+        "projection=triton_fp8_original_fp32_scales cuda=cu130 disable_mma_v5=1"
+    )
+    return RuntimeContract(
+        modules=("triton", "libucx"),
+        extensions=_COMMON_EXTENSIONS + ("batchgen_kernels.common._C_mgn_ops",),
+    )
+
+
 def run_runtime_preflight(server_args: object) -> str:
     """Validate the exact model runtime before server resources are allocated."""
 
@@ -402,6 +439,12 @@ def run_runtime_preflight(server_args: object) -> str:
     _check_torch()
     model_type = _resolve_model_type(model)
     contract = _CONTRACTS[model_type]
+    if (
+        model_type == "deepseek_v3"
+        and torch.cuda.is_available()
+        and torch.cuda.get_device_capability() == (10, 3)
+    ):
+        contract = _check_r1_sm103_runtime(server_args)
     # H20 = sm_90 with 78 SMs; device names are not reliable across SKUs.
     decode_backend = (
         "wgmma"

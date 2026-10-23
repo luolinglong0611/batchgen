@@ -192,6 +192,12 @@ def main():
         import libucx
         libucx.load_library()
         import torch
+        # Native MGN launches on the current CUDA device/stream, just like the
+        # production worker after set_device(local_rank). Moving tensors alone
+        # does not establish this contract for a non-default --device.
+        if args.check_gate or args.skeleton_only:
+            torch.cuda.set_device(torch.device(args.device))
+            report['cuda_current_device'] = torch.cuda.current_device()
         report['torch'] = torch.__version__
         report['cuda'] = torch.version.cuda
         report['transformers'] = importlib.metadata.version('transformers')

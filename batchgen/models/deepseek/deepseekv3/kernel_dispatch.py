@@ -11,27 +11,35 @@ import types
 import torch
 
 
+def validate_sm103_environment():
+    """Require an explicit eager correctness experiment and its compiler ABI."""
+    required = {
+        "BATCHGEN_R1_SM103_EXPERIMENTAL": "1",
+        "BATCHGEN_R1_SM103_ATTENTION": "triton_precision",
+        "DISABLE_MMA_V5": "1",
+        "TORCH_CUDA_CHANNEL": "cu130",
+    }
+    for name, expected in required.items():
+        if os.environ.get(name) != expected:
+            raise RuntimeError(f"R1 SM103 requires explicit {name}={expected}")
+    if os.environ.get("BATCHGEN_W8A16_DEQUANT", "0") != "0":
+        raise RuntimeError("R1 SM103 requires BATCHGEN_W8A16_DEQUANT=0 to preserve FP8 activation GEMM")
+    if torch.version.cuda != "13.0":
+        raise RuntimeError(f"R1 SM103 requires Torch CUDA 13.0 (cu130), got {torch.version.cuda!r}")
+    return "triton_precision"
+
+
 def select_sm103_experiment(device):
     """Select exact SM103 or reject an unrequested migration before imports."""
     device = torch.device(device)
     if device.type != "cuda" or torch.cuda.get_device_capability(device) != (10, 3):
         return False
-    if os.environ.get("BATCHGEN_R1_SM103_EXPERIMENTAL") != "1":
-        raise RuntimeError(
-            "R1 SM103 is not qualified for default dispatch. The explicit "
-            "BATCHGEN_R1_SM103_EXPERIMENTAL=1 experiment is required; "
-            "legacy FA3/FlashMLA will not be selected on this device."
-        )
+    validate_sm103_environment()
     return True
 
 
 def w8a16_gemm(weight_data_fp8, weight_scale_inv_fp32, activation_bf16):
     if select_sm103_experiment(activation_bf16.device):
-        if os.environ.get("DISABLE_MMA_V5") != "1":
-            raise RuntimeError(
-                "The R1 SM103 Triton 3.5 projection experiment requires "
-                "DISABLE_MMA_V5=1 to avoid the unqualified MMA v5 compiler path"
-            )
         from batchgen.attention.mla.sm103_backend import w8a16_gemm as implementation
     else:
         from batchgen.attention.mla.fa3_backend import w8a16_gemm as implementation
@@ -76,7 +84,8 @@ def _unsupported_legacy_attention(self, *args, **kwargs):
 
 
 def bind_sm103_attention(module):
-    """Bind only wrapper-supported methods; do not enable a new primitive here."""
+    """Bind the explicitly requested high-precision eager experiment."""
+    implementation_name = validate_sm103_environment()
     from batchgen.attention.mla.sm103_backend import (
         mla_prefill_sm103_w8a16,
         mla_prefill_sm103_w8a16_prepacked,
@@ -96,5 +105,4 @@ def bind_sm103_attention(module):
     for name, implementation in bindings.items():
         setattr(module, name, types.MethodType(implementation, module))
     module._batchgen_r1_sm103_experimental = True
-    # Selection of _r1_attention_implementation remains an independent, explicit
-    # qualification decision. Binding does not promote the high-precision path.
+    module._r1_attention_implementation = implementation_name
