@@ -3,11 +3,11 @@
 `plan_sglang_formal_candidate.py` creates local JSON plans only. It never starts
 services, contacts the containers, queries GPUs or sends requests. It leaves
 the diagnostic launcher/executor and frozen QA/6000-request workload untouched.
-Candidate A completed a twelve-request functional diagnostic. Its first
-32-request fixed-length attempt failed during MoE prefill, and both services
-have been stopped. An isolated test reproduced the native MoE launch boundary,
-and a smaller-chunk candidate has started. No candidate is admitted for the
-formal 6000-request performance comparison yet.
+Candidate A now completes fixed-length pilots through2048 requests using a
+smaller prefill chunk and CUDA Graphs. The earlier larger-chunk MoE failure
+and numerical/quality limitations remain recorded below. Candidate B, with
+two independent TP8 replicas, is prepared but has not started. No candidate
+has completed the formal6000-request performance comparison yet.
 
 The identity remains `sglang0.5.5.post3+R1-routing-compat`, using the original
 R1 FP8 weights and F32 block scales. The R1 routing compatibility patch and the
@@ -416,3 +416,32 @@ The closed export SHA256 is
 This is still a single tuning observation. An input8192/output2048 first2048
 burst started at20:43:05 UTC to test the configured per-rank capacity more
 closely; it is not a completed result or a saturation claim.
+
+### Graph candidate: completed 2048-request pilot
+
+The first2048 input8192/output2048 requests completed at20:55:43 UTC on
+2026-10-23. BCT was677.421717236 seconds, or6191.570026886 output tokens/s.
+The68.485722229-second warmup is excluded. Every measured request returned
+HTTP200 on its first attempt with exactly8192 input and2048 output tokens,
+ending by length. All2048 submission attempts began within0.211200031 seconds
+and before the first complete response. Decode logs showed all16 DP ranks at
+128 running requests with graph replay; this observes the configured running
+limit, not a globally optimal or saturated baseline.
+
+Both original CPU client identities were absent before and after export,
+following natural exit0 without cleanup signals or remaining server requests.
+Independent offline checks verified all2049 rows, including warmup, and
+recomputed the full-body BCT. The nine raw files total35147319 bytes. Summary
+SHA256 is `0161e078bbb7ed36c79562bbe0f5ad219721d165360ba4839f7a389abdc73ed2`;
+requests SHA256 is
+`30d9a2f52ec7dfc90602f2fa6bbf12c406d499032550dc9d344d606d2b80803f`.
+The closed export SHA256 is
+`177799c8c40258f9af9b77bf4ab4e259a853d604a79f2535b8e20ea297278c28`;
+the local integrity index is
+`d99674374168e08df3badaee3c8cf91f38cbbd98d3c55cbbb95762bcbdfde10b`.
+
+This is one unchanged workload prefix, with default dense FP8 tuning and a
+single-request warmup. It does not establish model accuracy, formal6000
+steady-state performance or a BatchGen speedup. A separate graph-enabled
+known-answer12 functional regression started at20:56:54 UTC; its result is
+pending at this checkpoint.
