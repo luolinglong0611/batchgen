@@ -282,3 +282,30 @@ patch is involved. Fresh full-model functional and fixed-length subset checks
 are still required before any performance conclusion.
 Both nodes started this candidate as cohort `sglang-formal-A-v3` at
 2026-10-23 19:29:58 UTC; READY had not yet been observed at that checkpoint.
+
+### Smaller-chunk eager pilot completed
+
+Both nodes subsequently reached READY. The frozen v3 capacity record reports
+52.98 GiB weights, 172.97 GiB KV cache, 2642944 token capacity and no CUDA
+Graph allocation in each of the 16 server-info entries. Separate rank logs
+confirm the token allocations; server-info list order is not a rank map.
+The capacity receipt SHA256 is
+`981a8627a777410a53d2f2ff759dc9c33c329925617626733fdf2cca2780f335`.
+
+The first 32 unmodified requests from the 6000-request 8192-input/2048-output
+manifest completed successfully with `ignore_eos=true`. All 32 response bodies
+were received and validated, with 262144 input and 65536 output tokens.
+Measured BCT was 281.105371542 seconds, giving 233.1367758663 output tokens/s.
+One successful 243.14531451-second warmup was excluded. The client and its
+guard exited, with no cleanup signals or remaining server requests; both model
+services remained running for the next subset. The raw summary SHA256 is
+`7930a29c6e5e1cfa60b48dd253bd7e21943ddf98540e2c79541aff4f4b03b520`,
+and the terminal guard SHA256 is
+`af7b3b4bdb6b3fcf14e076b626c1bfd14ace006382eecf7aa38dcfdcd8db53bf`.
+
+This is a small eager-mode tuning observation, not a formal 6000-request result,
+an optimized SGLang baseline, model-quality qualification, or a BatchGen speedup.
+It establishes that this full-model workload completes after reducing the
+prefill chunk; it does not prove every mixed scheduler shape is safe. A separate
+128-request burst from the same manifest was started at 2026-10-23 19:47:49 UTC
+after fresh readiness snapshots and closure of the preceding client.
