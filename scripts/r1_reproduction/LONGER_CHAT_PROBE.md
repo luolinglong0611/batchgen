@@ -11,6 +11,7 @@ uses only Python's standard library and existing standard-library client helpers
 | --- | --- | --- | --- |
 | `r1-longer-chat-2048-v1` | Six original chat cases, two copies each | 2048 | One BatchGen batch, or 12 SGLang `/generate` requests with concurrency 12 |
 | `r1-identical-arithmetic-16x128-v1` | 16 copies of the original arithmetic chat, with identical prompt/input IDs | 128 | One BatchGen batch; native mode also supports 16 concurrent requests |
+| `r1-identical-arithmetic-16x128-context12288-v1` | Same 16 arithmetic copies, independently named IDs | 128 | One BatchGen batch with pool context metadata 12288 |
 
 Both use greedy temperature 0/top-p 1/top-k 1, allow EOS, and declare protocol
 seed 20261023. SGLang receives `sampling_seed`; BatchGen has no request seed
@@ -29,6 +30,10 @@ python scripts/r1_reproduction/longer_chat_probe.py prepare \
 python scripts/r1_reproduction/longer_chat_probe.py prepare \
   --fixture /path/correctness-fixture-v1.json \
   --probe identical-arithmetic --output /path/identical-arithmetic-16-v1
+
+python scripts/r1_reproduction/longer_chat_probe.py prepare \
+  --fixture /path/correctness-fixture-v1.json \
+  --probe identical-arithmetic-wide-pool --output /path/identical-arithmetic-wide-pool-v1
 ```
 
 Prepare prints the manifest SHA. The new directory contains the original
@@ -67,8 +72,13 @@ An external bounded guardian should own any actual client process.
 BatchGen receives one files upload and one batch creation for the entire
 request list. Polling and result downloads use the existing batch client with
 a 1200-second phase deadline, 60-second per-HTTP timeout and EOS allowed.
-The batch-level context limit is frozen at 4096, covering every input plus its
-output cap; this is a short diagnostic rather than a formal KV-budget comparison.
+The two original protocols retain batch context metadata 4096. The separate
+wide-pool variant sets it to 12288 for an explicitly declared first-wave pool
+intended to continue with longer requests, including the 8192+2048 QA sanity.
+This changes neither arithmetic input IDs nor its 128-token generation cap.
+The scheduler retains the first pool context metadata; worker model context
+checks use the model's native window, so this metadata alone does not establish
+a hard cap or prove actual KV capacity. This is not a formal KV-budget comparison.
 Original downloaded result files and the complete parsed batch results are
 retained. BatchGen API text is never re-tokenized into purported native IDs.
 Its run records explicitly mark API native IDs unavailable.
@@ -113,3 +123,10 @@ These tests exercise exact freezing, source/deployment pins, rehashed input
 tampering, single-batch submission, native response retention, empty EOS text,
 nonfinite/error handling, no retries and twelve in-flight mocked native calls.
 They do not load a model, call a real endpoint, or qualify GPU correctness.
+
+Changing helper source changes its manifest source pin. Keep previously frozen
+manifests and source snapshots for audit; prepare new directories for future
+runs under the new source. Old manifest files must not be edited to substitute
+a new source hash. The two original protocols preserve their request/teacher
+bytes when freshly prepared with the new helper; only the new wide-pool
+protocol has the new context metadata and independent request IDs/tag.

@@ -23,7 +23,8 @@ import full_model_correctness as fixed
 SOURCE_FIXTURE_SHA256 = 'f7ed0434a2894d604115affeed28ba279e59acda0794932d6a21359fa649d53d'
 SEED = 20261023
 TAGS = {'longer-chat': 'r1-longer-chat-2048-v1',
-        'identical-arithmetic': 'r1-identical-arithmetic-16x128-v1'}
+        'identical-arithmetic': 'r1-identical-arithmetic-16x128-v1',
+        'identical-arithmetic-wide-pool': 'r1-identical-arithmetic-16x128-context12288-v1'}
 SOURCE_NAMES = ('longer_chat_probe.py', 'full_model_correctness.py',
                 'batch_benchmark_client.py', 'benchmark_client.py')
 LIMITATIONS = [
@@ -77,10 +78,14 @@ def generation(probe):
             'frequency_penalty': 0.0, 'presence_penalty': 0.0, 'repetition_penalty': 1.0}
 
 
+def pool_context(probe):
+    return 12288 if probe == 'identical-arithmetic-wide-pool' else 4096
+
+
 def frozen_requests(fixture, probe):
     if probe == 'longer-chat':
         selected = [(repeat, case) for repeat in range(2) for case in fixture['cases']]
-    elif probe == 'identical-arithmetic':
+    elif probe in ('identical-arithmetic', 'identical-arithmetic-wide-pool'):
         arithmetic = next(case for case in fixture['cases'] if case['id'] == 'arithmetic')
         selected = [(repeat, arithmetic) for repeat in range(16)]
     else:
@@ -106,11 +111,11 @@ def prepare(fixture_path, output, probe):
         'conditions': fixture['conditions'], 'generation': generation(probe),
         'requests': 'requests.json', 'requests_sha256': sha(output / 'requests.json'),
         'request_count': len(requests), 'source_pins': source_pins(),
-        'batchgen_batches': 1, 'batchgen_max_context_length': 4096,
+        'batchgen_batches': 1, 'batchgen_max_context_length': pool_context(probe),
         'sglang_http_concurrency': len(requests),
         'teacher_reference_only': True, 'rank_coverage': 'unobserved; requires actual service-run worker traces',
         'intended_execution': ('fresh admitted engine; this batch is the first submitted wave'
-                               if probe == 'identical-arithmetic' else 'one mixed chat batch'),
+                               if probe != 'longer-chat' else 'one mixed chat batch'),
         'scope': 'paired chat diagnostics; not quality, determinism, or performance qualification',
         'limitations': LIMITATIONS}
     require_sha(fixture_path, SOURCE_FIXTURE_SHA256, 'Original fixture after prepare')
@@ -140,7 +145,7 @@ def load_manifest(path, expected_sha):
     if (requests != frozen_requests(fixture, probe) or manifest.get('conditions') != fixture['conditions']
             or manifest.get('request_count') != len(requests)
             or manifest.get('batchgen_batches') != 1
-            or manifest.get('batchgen_max_context_length') != 4096
+            or manifest.get('batchgen_max_context_length') != pool_context(probe)
             or manifest.get('sglang_http_concurrency') != len(requests)
             or manifest.get('teacher_reference_only') is not True):
         raise ValueError('Frozen request/input/teacher/order contract changed')

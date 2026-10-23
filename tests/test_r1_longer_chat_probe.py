@@ -102,6 +102,43 @@ class ProtocolTests(unittest.TestCase):
                 self.assertIn('unobserved', manifest['rank_coverage'])
                 self.assertEqual(manifest['batchgen_batches'], 1)
 
+    def test_wide_pool_only_changes_pool_metadata_and_independent_request_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); source, fixture = fixture_file(root)
+            with patch.object(probe, 'SOURCE_FIXTURE_SHA256', probe.sha(source)):
+                prepared = {name: probe.prepare(source, root / name, name)
+                    for name in ('longer-chat', 'identical-arithmetic', 'identical-arithmetic-wide-pool')}
+                loaded = {name: probe.load_manifest(item['manifest'], item['manifest_sha256'])
+                          for name, item in prepared.items()}
+                old, _, original = loaded['identical-arithmetic']
+                wide, _, requests = loaded['identical-arithmetic-wide-pool']
+                self.assertEqual(old['generation'], wide['generation'])
+                self.assertEqual(wide['generation']['max_new_tokens'], 128)
+                self.assertFalse(wide['generation']['ignore_eos'])
+                self.assertEqual(old['batchgen_max_context_length'], 4096)
+                self.assertEqual(loaded['longer-chat'][0]['batchgen_max_context_length'], 4096)
+                self.assertEqual(wide['batchgen_max_context_length'], 12288)
+                self.assertEqual(wide['protocol_tag'], 'r1-identical-arithmetic-16x128-context12288-v1')
+                for before, after in zip(original, requests):
+                    self.assertNotEqual(before['custom_id'], after['custom_id'])
+                    self.assertEqual({k: v for k, v in before.items() if k != 'custom_id'},
+                                     {k: v for k, v in after.items() if k != 'custom_id'})
+                    self.assertEqual(after['case'], fixture['cases'][0])
+                deployment = deployment_file(root, fixture, 'batchgen')
+                plan = probe.make_plan(prepared['identical-arithmetic-wide-pool']['manifest'],
+                    prepared['identical-arithmetic-wide-pool']['manifest_sha256'], 'batchgen',
+                    deployment, probe.sha(deployment), ['http://node0:10900'])
+                self.assertEqual(plan['batchgen_max_context_length'], 12288)
+                self.assertEqual(len(plan['payloads']), 16)
+                self.assertTrue(all(item['body']['max_tokens'] == 128 for item in plan['payloads']))
+                # Merely editing/re-pinning an old manifest's metadata cannot
+                # turn it into the distinct wide-pool protocol.
+                path = Path(prepared['identical-arithmetic']['manifest'])
+                old['batchgen_max_context_length'] = 12288
+                path.write_text(probe.canonical(old))
+                with self.assertRaisesRegex(ValueError, 'contract changed'):
+                    probe.load_manifest(path, probe.sha(path))
+
     def test_both_plans_frozen_payloads_exactly12_no_teacher_http_and_source_pins(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); source, fixture = fixture_file(root)
