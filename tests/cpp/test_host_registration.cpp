@@ -159,6 +159,9 @@ void test_tensor_aware_plan() {
 void test_metadata_shapes_and_bounds() {
     const auto checked = hr::checked_tensor_extent(8, 24, {3, 4}, "bfloat16", 128);
     assert(checked.offset == 8 && checked.bytes == 24);
+    const auto exact_end = hr::checked_tensor_extent(104, 24, {3, 4}, "bfloat16", 128);
+    assert(exact_end.offset + exact_end.bytes == 128);
+    assert(hr::checked_tensor_extent(0, 128, {128}, "float8_e4m3fn", 128).bytes == 128);
     assert(hr::checked_tensor_extent(0, 4, {}, "float32", 128).bytes == 4);
     struct Invalid {
         std::int64_t offset, bytes;
@@ -168,10 +171,14 @@ void test_metadata_shapes_and_bounds() {
     };
     for (const auto& item : std::vector<Invalid>{
              {-1, 4, {4}, "uint8", 128}, {0, -1, {4}, "uint8", 128},
+             {0, 0, {0}, "uint8", 128},
              {126, 4, {4}, "uint8", 128}, {129, 1, {1}, "uint8", 128},
              {0, 4, {0}, "float32", 128}, {0, 4, {-1}, "float32", 128},
              {0, 4, {2, 2}, "bfloat16", 128}, {0, 4, {1}, "unknown", 128},
              {0, 4, {std::numeric_limits<std::int64_t>::max()}, "float64", 128},
+             {0, std::numeric_limits<std::int64_t>::max(),
+                 {std::numeric_limits<std::int64_t>::max(), 2}, "uint8",
+                 std::numeric_limits<std::int64_t>::max()},
              {0, 4, {}, "float64", 128}, {0, 4, {1}, "float32", -1}}) {
         bool rejected = false;
         try { hr::checked_tensor_extent(item.offset, item.bytes, item.shape, item.dtype, item.total); }
