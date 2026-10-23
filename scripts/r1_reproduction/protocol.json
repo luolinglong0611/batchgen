@@ -611,6 +611,40 @@
       "native_token_identity_available": false,
       "model_quality_qualified": false,
       "performance_qualified": false
+    },
+    "short_concurrent_diagnostic": {
+      "status": "operational_smoke_completed_NOT_quality_or_performance_pass",
+      "records": 16,
+      "generated_tokens": 2048,
+      "elapsed_seconds_not_benchmark": 85.248923784,
+      "run_sha256": "13c1dd19c24e07b4a922186a91e3277c5ba2753bd89331120296fd53c5b94d16",
+      "batch_id": "batch_3382d2a57dd843e5b52c85a5",
+      "comparison_with_first_serial_repeat": "all 16 texts differ; native BatchGen output IDs unavailable",
+      "quality_qualified": false,
+      "performance_qualified": false
+    },
+    "release_for_baseline": {
+      "nodes": 2,
+      "owners_and_launchers_absent": true,
+      "launcher_exit_codes": [
+        0,
+        0
+      ],
+      "ordered_shutdown_seconds": [
+        125.042,
+        81.951
+      ],
+      "evidence": "bg-stop-for-baseline-v1.json, bg-stop-for-baseline-v1-after.json and final runs/r1-diagnostic-v3/nodeN/launch.json; phase8 OSS archives"
+    },
+    "greedy_path_source_audit": {
+      "submitted_requests": 28,
+      "temperature": 0.0,
+      "top_k": 1,
+      "top_p": 1.0,
+      "selection": "logits.argmax; zero preserved through scheduler fallback and SequenceEntry",
+      "sampling_error_found": false,
+      "repeat_difference_root_cause": "unresolved; no floating-point atomic reduction found in native scatter path",
+      "independent_memory_contract_issue": "CUB scan receives E+1 elements from E-element expert_counts; fix and sanitizer qualification pending; not established as cause of repeated output differences"
     }
   },
   "strict_attention_gate_scope_audit": {
