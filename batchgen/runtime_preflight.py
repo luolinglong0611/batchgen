@@ -459,7 +459,7 @@ def run_runtime_preflight(server_args: object) -> str:
         module = _import_required(
             module_name,
             origin=_ORIGIN_SITE
-            if module_name in {"flash_attn_interface", "flash_attn", "flash_mla"}
+            if module_name in {"flash_attn_interface", "flash_attn", "flash_mla", "triton"}
             else None,
         )
         if module_name == "libucx":
