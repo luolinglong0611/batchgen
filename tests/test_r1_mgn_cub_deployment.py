@@ -262,6 +262,7 @@ class SafetyTests(unittest.TestCase):
             pid = proc / '12345678'
             pid.mkdir()
             (pid / 'stat').write_text('12345678 (python) ' + ' '.join(['S'] + ['0'] * 18 + ['99']))
+            (pid / 'status').write_text(f'Uid:\t{os.geteuid()}\t{os.geteuid()}\t{os.geteuid()}\t{os.geteuid()}\n')
             (pid / 'cmdline').write_bytes(b'python\0')
             (pid / 'maps').write_text('/example/repo/batchgen/core_engine.test.so (deleted)')
             (pid / 'cwd').symlink_to('/tmp')
@@ -274,6 +275,7 @@ class SafetyTests(unittest.TestCase):
             pid = proc / '12345678'
             pid.mkdir()
             (pid / 'stat').write_text('12345678 (python) ' + ' '.join(['S'] + ['0'] * 18 + ['99']))
+            (pid / 'status').write_text(f'Uid:\t{os.geteuid()}\t{os.geteuid()}\t{os.geteuid()}\t{os.geteuid()}\n')
             (pid / 'cmdline').write_bytes(b'python\0')
             original = Path.read_text
             def read(path, *args, **kwargs):
@@ -283,6 +285,29 @@ class SafetyTests(unittest.TestCase):
             with mock.patch.object(Path, 'read_text', read):
                 with self.assertRaisesRegex(RuntimeError, 'Cannot audit live process'):
                     deploy.audit_no_batchgen(Path('/example'), proc)
+
+    def test_other_uid_permission_limits_are_reported_without_reading_commands(self):
+        with tempfile.TemporaryDirectory() as directory:
+            proc = Path(directory)
+            pid = proc / '12345678'
+            pid.mkdir()
+            (pid / 'stat').write_text('12345678 (python) ' + ' '.join(['S'] + ['0'] * 18 + ['99']))
+            outside_uid = os.geteuid() + 10000
+            (pid / 'status').write_text(f'Uid:\t{outside_uid}\t{outside_uid}\t{outside_uid}\t{outside_uid}\n')
+            original = Path.open
+            def open_path(path, *args, **kwargs):
+                if path == pid / 'cmdline':
+                    raise AssertionError('Other UID command must not be inspected')
+                if path == pid / 'maps':
+                    raise PermissionError(13, 'Permission denied')
+                return original(path, *args, **kwargs)
+            with mock.patch.object(Path, 'open', open_path):
+                report = deploy.audit_no_batchgen(Path('/example'), proc)
+            self.assertTrue(report['same_uid_audit_complete'])
+            self.assertFalse(report['namespace_complete'])
+            self.assertEqual(report['processes_scanned'], 0)
+            self.assertEqual(report['uninspected_other_uid'][0]['effective_uid'], outside_uid)
+            self.assertEqual(report['uninspected_other_uid'][0]['map_access'], 'permission_denied')
 
 
 if __name__ == '__main__':

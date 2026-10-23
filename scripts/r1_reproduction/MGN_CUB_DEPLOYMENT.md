@@ -33,8 +33,12 @@ python3 repo/scripts/r1_reproduction/deploy_mgn_cub_fix.py --node-rank 0 --apply
 
 执行前检查固定容器 hostname、旧库 SHA、loader/wrapper SHA、已验证 core SHA。
 它持有实际 BatchGen `host.lock` 与部署锁，并在每次替换前扫描 `/proc` 中的
-BatchGen 命令、checkout multiprocessing 进程及映射 MGN/core 的进程。
-无法读取的活进程会导致拒绝。启动前 preflight 可能早于 admission lock，故父任务
+我方 real/effective UID 下的 BatchGen 命令、checkout multiprocessing 进程及
+映射 MGN/core 的进程。我方 UID 下无法读取的活进程会导致拒绝。两容器的我方 UID
+为 500，实际存在其他 UID（0、1000）的平台进程且 maps 读取返回 EACCES；工具仅
+记录这些进程的 PID、UID 和访问限制，不检查命令、不声称整个 PID namespace
+无 BatchGen，报告 `uninspected_other_uid` 及 `namespace_complete=false`。
+启动前 preflight 可能早于 admission lock，故父任务
 仍须保持 BatchGen 启动器停止；进程扫描不能代替该操作约束。
 
 工具先创建独立备份与 `transaction.json`，fsync 文件、事务目录和父目录，再逐个

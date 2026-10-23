@@ -122,8 +122,15 @@ def process_reasons(argv, maps, cwd, root):
 
 
 def audit_no_batchgen(root, proc=Path('/proc')):
-    """Fail closed on unreadable live processes; baseline SGLang is allowed."""
-    blockers, scanned = [], 0
+    """Audit our real/effective UID; explicitly retain other-UID unknowns.
+
+    Shared containers expose platform processes whose maps cannot be read by
+    this user. Those processes are outside this audit, not evidence of absence
+    of BatchGen in the full PID namespace. Their commands are never inspected.
+    Our UID remains fail-closed; the real admission lock is held for mutations.
+    """
+    blockers, scanned, other_uid = [], 0, []
+    own_uid = os.geteuid()
     for directory in proc.iterdir():
         if not directory.name.isdigit() or int(directory.name) == os.getpid():
             continue
@@ -131,6 +138,21 @@ def audit_no_batchgen(root, proc=Path('/proc')):
             raw_stat = (directory / 'stat').read_text()
             fields = raw_stat[raw_stat.rfind(')') + 2:].split()
             if fields[0] in ('Z', 'X'):
+                continue
+            status = (directory / 'status').read_text()
+            uids = next(line for line in status.splitlines() if line.startswith('Uid:')).split()[1:]
+            require(len(uids) == 4, f'Invalid UID fields for process {directory.name}')
+            real_uid, effective_uid = int(uids[0]), int(uids[1])
+            if own_uid not in (real_uid, effective_uid):
+                item = {'pid': int(directory.name), 'real_uid': real_uid, 'effective_uid': effective_uid,
+                        'scope': 'Other UID; command and mappings not audited'}
+                try:
+                    with (directory / 'maps').open('r') as handle:
+                        handle.read(1)
+                    item['map_access'] = 'readable_but_outside_uid_scope'
+                except PermissionError as exc:
+                    item.update(map_access='permission_denied', errno=exc.errno)
+                other_uid.append(item)
                 continue
             argv = (directory / 'cmdline').read_bytes().decode(errors='replace').split('\0')
             maps = (directory / 'maps').read_text()
@@ -142,15 +164,18 @@ def audit_no_batchgen(root, proc=Path('/proc')):
             scanned += 1
             if reasons:
                 blockers.append({'pid': int(directory.name), 'starttime_ticks': int(fields[19]),
-                                 'reasons': reasons, 'argv': argv, 'cwd': cwd})
+                                 'real_uid': real_uid, 'effective_uid': effective_uid, 'reasons': reasons})
         except (FileNotFoundError, ProcessLookupError):
             continue  # Process exited during the snapshot.
         except OSError as exc:
             if directory.exists():
                 raise RuntimeError(f'Cannot audit live process {directory.name}: {exc}') from exc
     require(not blockers, f'Active BatchGen process(es): {json.dumps(blockers)}')
-    return {'time_unix': time.time(), 'processes_scanned': scanned, 'blockers': [],
-            'scope': 'Command/module, mapped MGN/core, checkout multiprocessing; not a service-start lock'}
+    return {'time_unix': time.time(), 'audit_uid': own_uid, 'processes_scanned': scanned, 'blockers': [],
+            'same_uid_audit_complete': True, 'uninspected_other_uid': other_uid,
+            'namespace_complete': not other_uid,
+            'scope': 'Our real/effective UID: command/module, mapped MGN/core, checkout multiprocessing; '
+                     'other UIDs explicitly uninspected; not a service-start lock'}
 
 
 PROBE = '''import os,sys,json,hashlib,pathlib
