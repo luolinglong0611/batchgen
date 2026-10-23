@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "full_model_short_generation_collected_concurrency_and_sglang_pending",
+  "status": "full_model_short_serial_and_concurrent_diagnostics_collected_not_quality_or_performance_pass",
   "model": "deepseek-ai/DeepSeek-R1",
   "model_revision": "20f2865710d161dc4a32c4e8c3d7c42c7b9852f8",
   "paper_reference": {
@@ -503,7 +503,7 @@
     "forward_executed": true,
     "performance_benchmark_executed": false,
     "speedup_established": false,
-    "status": "v4 fixed12serial greedy probes completed on generation3/epoch2; all1536tokens returned; no quality/performance pass; concurrency and SGLang pending",
+    "status": "v4 fixed 12 serial greedy probes and 16-request concurrent smoke completed; output differences unresolved; no quality/performance pass; see BG_GREEDY_AUDIT.md",
     "prior_failures": [
       {
         "run_id": "r1-diagnostic-v1",
@@ -610,7 +610,9 @@
       ],
       "native_token_identity_available": false,
       "model_quality_qualified": false,
-      "performance_qualified": false
+      "performance_qualified": false,
+      "native_token_identity_scope": "Full generated native token IDs unavailable; first generated IDs are present in prefill metrics.",
+      "first_generated_token_ids_available_in_prefill_logs": true
     },
     "short_concurrent_diagnostic": {
       "status": "operational_smoke_completed_NOT_quality_or_performance_pass",
@@ -621,7 +623,31 @@
       "batch_id": "batch_3382d2a57dd843e5b52c85a5",
       "comparison_with_first_serial_repeat": "all 16 texts differ; native BatchGen output IDs unavailable",
       "quality_qualified": false,
-      "performance_qualified": false
+      "performance_qualified": false,
+      "real_prefill_ranks": 14,
+      "empty_prefill_ranks": [
+        5,
+        11
+      ],
+      "prefill_sequences_by_rank": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        0,
+        1,
+        1,
+        1,
+        1,
+        1,
+        0,
+        1,
+        1,
+        2,
+        2
+      ],
+      "placement_limit": "Metrics omit UUID/custom ID; individual repeated requests cannot all be mapped uniquely. Per-step decode row order/counts were not recorded."
     },
     "release_for_baseline": {
       "nodes": 2,
@@ -644,7 +670,146 @@
       "selection": "logits.argmax; zero preserved through scheduler fallback and SequenceEntry",
       "sampling_error_found": false,
       "repeat_difference_root_cause": "unresolved; no floating-point atomic reduction found in native scatter path",
-      "independent_memory_contract_issue": "CUB scan receives E+1 elements from E-element expert_counts; fix and sanitizer qualification pending; not established as cause of repeated output differences"
+      "independent_memory_contract_issue": "CUB E+1 input extent fixed in commit 17b9fcbc2a4f9cfb9a5d31c6cb8b7db99f6331bd; native/sanitizer qualification tracked separately; not established as cause of repeated output differences"
+    },
+    "greedy_log_correlation_audit": {
+      "document": "scripts/r1_reproduction/BG_GREEDY_AUDIT.md",
+      "status": "evidence_correlated_root_cause_unresolved",
+      "log_path_on_each_node": "/home/admin/batchgen-r1-repro-20261023/r1-diagnostic-v3.log",
+      "log_sha256": {
+        "node0": "f91bca6dc06474fe8070293d97b5d5225c961496f6f6226d233ef9fa2f946f72",
+        "node1": "685dc6b42234272e191f5ad692da25e93f46ea9a69cc11c0f0abffab1031089d"
+      },
+      "line_number_convention": "one-based Path(log).read_text(errors=\"replace\").splitlines(); includes carriage-return progress lines",
+      "serial_pairs": [
+        {
+          "case": "arithmetic",
+          "prompt_tokens": 17,
+          "repeat_ranks": [
+            0,
+            6
+          ],
+          "prefill_metric_log_lines": [
+            "node0:8846",
+            "node0:10152"
+          ],
+          "first_generated_token_ids": [
+            33001,
+            33001
+          ],
+          "common_text_prefix_characters": 58
+        },
+        {
+          "case": "algebra",
+          "prompt_tokens": 18,
+          "repeat_ranks": [
+            1,
+            7
+          ],
+          "prefill_metric_log_lines": [
+            "node0:9064",
+            "node0:10366"
+          ],
+          "first_generated_token_ids": [
+            33001,
+            33001
+          ],
+          "common_text_prefix_characters": 109
+        },
+        {
+          "case": "chinese",
+          "prompt_tokens": 26,
+          "repeat_ranks": [
+            2,
+            8
+          ],
+          "prefill_metric_log_lines": [
+            "node0:9287",
+            "node1:5224"
+          ],
+          "first_generated_token_ids": [
+            16426,
+            16426
+          ],
+          "common_text_prefix_characters": 59
+        },
+        {
+          "case": "recall",
+          "prompt_tokens": 23,
+          "repeat_ranks": [
+            3,
+            9
+          ],
+          "prefill_metric_log_lines": [
+            "node0:9501",
+            "node1:5402"
+          ],
+          "first_generated_token_ids": [
+            33001,
+            33001
+          ],
+          "common_text_prefix_characters": 198
+        },
+        {
+          "case": "code",
+          "prompt_tokens": 23,
+          "repeat_ranks": [
+            4,
+            10
+          ],
+          "prefill_metric_log_lines": [
+            "node0:9715",
+            "node1:5580"
+          ],
+          "first_generated_token_ids": [
+            33001,
+            33001
+          ],
+          "common_text_prefix_characters": 239
+        },
+        {
+          "case": "logic",
+          "prompt_tokens": 28,
+          "repeat_ranks": [
+            5,
+            11
+          ],
+          "prefill_metric_log_lines": [
+            "node0:9938",
+            "node1:5758"
+          ],
+          "first_generated_token_ids": [
+            33001,
+            33001
+          ],
+          "common_text_prefix_characters": 458
+        }
+      ],
+      "planned_cross_rank_migration_waves": 0,
+      "explicit_no_migration_records": 13,
+      "no_migration_node0_log_lines": [
+        8763,
+        8980,
+        9203,
+        9417,
+        9631,
+        9854,
+        10068,
+        10282,
+        10496,
+        10708,
+        10920,
+        11132,
+        11345
+      ],
+      "historical_load_observation": "Assigned completed entries contribute to L2 placement totals; may be scheduling policy, not established as bug. Repeats differ in rank and four pairs in node.",
+      "interpretation_limits": [
+        "First argmax equality does not establish prefill hidden-state/KV equality or locate numerical origin in decode.",
+        "Character-prefix lengths are text offsets, not native token divergence positions.",
+        "No planned cross-rank migration does not establish KV byte equality through ordinary offload/reload/append.",
+        "All 16 ranks participate in MoE collectives; only 14 have real prefill input in this concurrent batch."
+      ],
+      "next_diagnostic": "Fixed-rank/fixed-shape repetition with UUID-to-row mapping, full native token IDs, same-logits top2 margin, phase generation and valid KV transfer/page provenance; then vary placement deliberately."
     }
   },
   "strict_attention_gate_scope_audit": {
