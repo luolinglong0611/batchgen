@@ -370,3 +370,33 @@ untuned dense FP8 configurations remain in use. There is still no formal6000
 result, optimized-baseline claim, quality pass or BatchGen speedup measurement.
 A first128 burst began at20:16:02 UTC after fresh two-node readiness records
 and closure of the32-request client; its result was pending at this checkpoint.
+
+### Graph candidate: 128- and 512-request pilots
+
+The following runs used the same v5 services and original first-N requests
+from the frozen 6000-request manifest, with input8192/output2048 and EOS
+ignored. Each had one separately timed warmup request, excluded from BCT.
+
+| Requests | Completion UTC | BCT seconds | Output tokens/s | Warmup seconds |
+| --- | --- | --- | --- | --- |
+| 128 | 2026-10-23 20:19:24 | 122.210913123 | 2145.013021351 | 68.255964834 |
+| 512 | 2026-10-23 20:25:59 | 235.561516607 | 4451.389238376 | 68.520140784 |
+
+Every response was HTTP200 on its first attempt, ended by length, and reported
+the exact requested input/output token counts. Both clients and guards closed
+with exit0, no cleanup signals and no remaining server requests. Raw evidence
+was collected only after checking the original processes absent. The summary
+SHA256 values for 128 and 512 respectively are
+`626eefc4f2b0916e24709136351f7103c91645cabd9b0b7e77c470f776515647`
+and `b260a115532e0df09ad202347c2837229fee19acea8123d0c7129d8ab5ad92d6`.
+The request-file SHA256 values respectively are
+`11fa05172a7b020b0cdba80b4dc9f133f11f0b5d12970a4b941a43c82a46e5d6`
+and `332cf201079d8e4b97e825a9cfcb3d7b406bc414f52e978f2d0258a44dc56e2a`.
+
+Both-node logs again show graph replay on all16 ranks. The512 pilot reaches
+32 running requests per DP rank, below the configured128; neither observation
+establishes saturation or a fully tuned baseline. The same untuned dense FP8
+configuration and single-request warmup limitations apply. These are SGLang
+tuning results, with no BatchGen speedup or model-quality claim. A separate
+512-request input2048/output8192 run started at20:29:32 UTC; its outcome is
+not included in this table.
