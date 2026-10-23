@@ -309,3 +309,28 @@ It establishes that this full-model workload completes after reducing the
 prefill chunk; it does not prove every mixed scheduler shape is safe. A separate
 128-request burst from the same manifest was started at 2026-10-23 19:47:49 UTC
 after fresh readiness snapshots and closure of the preceding client.
+
+The 128-request run completed at 19:57:11 UTC: all 128 responses passed the
+fixed-length checks, with 1048576 input and 262144 output tokens. Its BCT was
+301.870352212 seconds and output throughput was 868.3992915472 tokens/s;
+the 248.08451568-second warmup was excluded. The original guard and client
+were absent after natural exit0, with no cleanup signals or remaining requests.
+The raw summary SHA256 is
+`a5a1c629a8738c32a739ada75fe78de1320ec00f5672b99529a34cbf41950ba6`,
+and terminal guard SHA256 is
+`318746af653ddc5d707ad1e0bb15ebf5164ed1db16ae42b6e9a3e6cef762a58c`.
+Decode logs show eight running requests per DP rank and approximately 3% KV
+usage. These pilots do not establish saturation: even 512 requests average
+only 32 per DP rank, below a prospective per-rank concurrency target of 128.
+The single-request warmup also does not prove all larger-shape compilation is
+excluded; formal runs need representative warmup before measured repetitions.
+
+The next separate candidate is `A-c128-m085-k2048-graph-bs128`: 2048 global
+running requests and CUDA Graph capture up to 128 per DP rank. It retains the
+2048 per-rank prefill chunk, static memory fraction0.85 and original precision.
+This is a candidate optimization, not a graph-only ablation against c16 eager.
+Its two new source checks cover the existing graph runner and MLA backend;
+actual capture memory and replay must still be verified. Only the new tooling
+was transferred while v3 ran. Both original v3 supervisors were subsequently
+sent identity-bound SIGTERM after the 128 client had closed, to release the
+nodes for this separate candidate.
