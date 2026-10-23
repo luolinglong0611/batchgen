@@ -5,6 +5,7 @@ import json
 import math
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
@@ -127,8 +128,116 @@ class PlanAndGuard(unittest.TestCase):
             guard.os, "killpg"
         ) as kill:
             with self.assertRaisesRegex(RuntimeError, "fresh session leader"):
-                guard.signal_session(bad, 15)
+                guard.signal_primary_group(bad, 15)
             kill.assert_not_called()
+
+    def test_extra_group_is_never_signalled_and_requires_parent_cleanup(self):
+        leader = {"pid": 7, "pgid": 7, "sid": 7, "start_ticks": 13, "state": "Z"}
+        extra = {"pid": 8, "pgid": 8, "sid": 7, "start_ticks": 15, "state": "S"}
+        from unittest.mock import Mock
+
+        child = Mock(pid=7)
+        child.wait.return_value = 0
+        with patch.object(guard, "session_members", return_value=[leader, extra]), patch.object(
+            guard, "child_exited", return_value=True
+        ), patch.object(guard.os, "killpg") as kill:
+            receipt = guard.cleanup(child, leader)
+        kill.assert_not_called()
+        self.assertFalse(receipt["cleanup_complete"])
+        self.assertTrue(receipt["parent_cleanup_required"])
+        self.assertEqual(receipt["observed_other_pgid_members"], [extra])
+        self.assertEqual(receipt["remaining_live_other_pgid_members"], [extra])
+
+    def test_cleanup_shield_survives_repeated_stop_signals_and_restores_handlers(self):
+        def forbidden(signum, frame):
+            raise AssertionError("Stop signal interrupted final audit/save")
+
+        previous = {sig: signal.signal(sig, forbidden) for sig in (signal.SIGTERM, signal.SIGINT)}
+        try:
+            with guard.cleanup_signal_shield():
+                for _ in range(4):
+                    for sig in (signal.SIGTERM, signal.SIGINT):
+                        os.kill(os.getpid(), sig)
+                with guard.cleanup_signal_shield():
+                    os.kill(os.getpid(), signal.SIGTERM)
+                self.assertEqual(signal.getsignal(signal.SIGTERM), signal.SIG_IGN)
+            for sig in previous:
+                self.assertIs(signal.getsignal(sig), forbidden)
+        finally:
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
+
+    def test_supervisor_final_source_audit_and_report_save_shield_repeated_stop(self):
+        from types import SimpleNamespace
+
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            config, manifest = directory / "config.json", directory / "manifest.json"
+            config.write_text("{}")
+            manifest.write_text("{}")
+            args = SimpleNamespace(
+                expected_hostname="cpu-only-fixture",
+                gpu=0,
+                output=directory / "output",
+                config=config,
+                weights_manifest=manifest,
+                weights_root=directory / "unused",
+                stage="prefill",
+                seed=42,
+                repeats=2,
+            )
+            stopped = False
+            injections = []
+            original_sha, original_write = tool.sha256_file, Path.write_text
+            original_exists = Path.exists
+
+            def inject(where):
+                if stopped:
+                    injections.append(where)
+                    for sig in (signal.SIGTERM, signal.SIGINT):
+                        self.assertEqual(signal.getsignal(sig), signal.SIG_IGN)
+                        os.kill(os.getpid(), sig)
+
+            def fail_launch(*args, **kwargs):
+                nonlocal stopped
+                stopped = True
+                raise RuntimeError("CPU fixture stops before launching any child")
+
+            def audited_sha(path):
+                inject("source-or-report-audit")
+                return original_sha(path)
+
+            def audited_write(path, *args, **kwargs):
+                if path.name == "guard.json.tmp":
+                    inject("final-save")
+                return original_write(path, *args, **kwargs)
+
+            previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+            with patch.dict(sys.modules, {"attention_only_qualification": tool}), patch.object(
+                guard.socket, "gethostname", return_value=args.expected_hostname
+            ), patch.object(guard, "gpu_apps", return_value=[]), patch.object(
+                guard, "memory_available", return_value=128 * 1024**3
+            ), patch.object(
+                guard.subprocess, "Popen", side_effect=fail_launch
+            ), patch.object(
+                tool, "sha256_file", side_effect=audited_sha
+            ), patch.object(
+                Path, "write_text", audited_write
+            ), patch.object(
+                Path,
+                "exists",
+                lambda path: True if str(path) == "/.dockerenv" else original_exists(path),
+            ):
+                self.assertEqual(
+                    guard.supervise(args, SCRIPTS / "attention_only_qualification.py"), 1
+                )
+            receipt = json.loads((args.output / "guard.json").read_text())
+            self.assertEqual(receipt["status"], "failed_or_stopped_NOT_qualified")
+            self.assertTrue(receipt["sources_unchanged"])
+            self.assertIn("source-or-report-audit", injections)
+            self.assertIn("final-save", injections)
+            for sig, handler in previous.items():
+                self.assertEqual(signal.getsignal(sig), handler)
 
 
 @unittest.skipUnless(
@@ -136,7 +245,7 @@ class PlanAndGuard(unittest.TestCase):
     "Linux WNOWAIT lifecycle test; no CUDA needed",
 )
 class LinuxGuardLifecycle(unittest.TestCase):
-    def test_cleanup_owns_separate_compiler_group_in_same_new_session(self):
+    def test_cleanup_signals_only_primary_worker_which_reaps_its_extra_group(self):
         # A real CPU child imitates Ninja's separate PGID, without compiling or
         # accessing a GPU. The worker reaps that child before it exits.
         with tempfile.TemporaryDirectory() as directory:
@@ -152,6 +261,7 @@ class LinuxGuardLifecycle(unittest.TestCase):
                 f"with open({str(ready)+'.tmp'!r},'x') as handle: json.dump({{'child_pid':child.pid}},handle)\n"
                 f"os.replace({str(ready)+'.tmp'!r},{str(ready)!r})\n"
                 "while not stopping: time.sleep(.05)\n"
+                "child.terminate()\n"
                 "child.wait(timeout=5)\n"
             )
             child = subprocess.Popen([sys.executable, "-c", code], start_new_session=True)
@@ -173,7 +283,16 @@ class LinuxGuardLifecycle(unittest.TestCase):
                     receipt = guard.cleanup(child, saved)
                 cleaned = True
                 self.assertTrue(receipt["cleanup_complete"])
+                self.assertFalse(receipt["parent_cleanup_required"])
                 self.assertEqual(receipt["exit_code"], 0)
+                self.assertEqual(
+                    {row["pid"] for row in receipt["observed_other_pgid_members"]},
+                    {compiler_pid},
+                )
+                self.assertEqual(receipt["remaining_live_other_pgid_members"], [])
+                self.assertTrue(receipt["signals"])
+                for event in receipt["signals"]:
+                    self.assertEqual(event["pgids"], [child.pid])
                 self.assertEqual(receipt["remaining_live_session_members"], [])
                 self.assertFalse(Path(f"/proc/{child.pid}").exists())
                 self.assertFalse(Path(f"/proc/{compiler_pid}").exists())
@@ -372,6 +491,52 @@ class TensorContracts(unittest.TestCase):
         cache[0, 0, 0, 0] = 1
         with self.assertRaises(tool.CapturedInputMutation):
             tool.assert_inputs_unchanged(captured, fixed, cache, before)
+
+    def test_mutation_then_exception_is_fatal_and_synchronization_runs(self):
+        from unittest.mock import Mock
+
+        torch = self.torch
+        captured = {"q": torch.zeros(4, dtype=torch.bfloat16)}
+        fixed = {name: tool.tensor_record(value) for name, value in captured.items()}
+        cache = torch.zeros(4, dtype=torch.bfloat16)
+        before = tool.tensor_record(cache)
+        for target in (captured["q"], cache):
+            with self.subTest(target="capture" if target is captured["q"] else "cache"):
+                synchronize = Mock()
+
+                def mutate_then_raise(_cache):
+                    target[0] = 1
+                    raise ValueError("Unrelated candidate error")
+
+                with self.assertRaises(tool.CapturedInputMutation):
+                    tool.invoke_immutable_candidate(
+                        mutate_then_raise, captured, fixed, cache, before, synchronize
+                    )
+                synchronize.assert_called_once_with()
+                target.zero_()
+        synchronize = Mock()
+
+        def ordinary_error(_cache):
+            raise ValueError("Unchanged candidate error")
+
+        with self.assertRaisesRegex(ValueError, "Unchanged candidate error"):
+            tool.invoke_immutable_candidate(
+                ordinary_error, captured, fixed, cache, before, synchronize
+            )
+        synchronize.assert_called_once_with()
+
+    def test_changed_inputs_are_rejected_before_candidate_call(self):
+        from unittest.mock import Mock
+
+        torch = self.torch
+        captured = {"q": torch.zeros(4, dtype=torch.bfloat16)}
+        fixed = {name: tool.tensor_record(value) for name, value in captured.items()}
+        captured["q"][0] = 1
+        candidate, synchronize = Mock(), Mock()
+        with self.assertRaises(tool.CapturedInputMutation):
+            tool.invoke_immutable_candidate(candidate, captured, fixed, None, None, synchronize)
+        candidate.assert_not_called()
+        synchronize.assert_not_called()
 
 
 if __name__ == "__main__":

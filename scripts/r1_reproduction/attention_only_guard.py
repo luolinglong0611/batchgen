@@ -1,12 +1,13 @@
 """Bounded supervisor for attention_only_qualification; imported only on --execute.
 
 This supervisor never inspects or signals a model service. It requires an empty
-assigned GPU, then owns one new session. WNOWAIT pins its session leader until
-all final signals/audits finish. Different compiler PGIDs in that same session
-are included; descendants that create a new SID are outside the audit's scope.
+assigned GPU, then owns one new primary PGID. WNOWAIT protects only that primary
+PGID until the final signals/audit. Other PGIDs are observed but NEVER signalled;
+remaining members explicitly require parent cleanup. New-SID descendants remain
+outside the audit's scope. This is not automatic compiler-tree cleanup.
 """
 
-import hashlib
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -59,45 +60,59 @@ def child_exited(child):
     return os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
 
 
-def signal_session(saved, sig):
+def signal_primary_group(saved, sig):
     rows = session_members(saved)
     if saved["pid"] != saved["pgid"] or saved["pid"] != saved["sid"]:
         raise RuntimeError("Child was not started as a fresh session leader")
-    groups = {r["pgid"] for r in rows if r["state"] not in ("Z", "X")}
-    signalled = []
-    for group in sorted(groups):
-        # The unreaped leader pins this SID. A group still inside it can only
-        # belong to descendants of the new session, including compiler groups.
-        current = session_members(saved)
-        if not any(r["pgid"] == group and r["state"] not in ("Z", "X") for r in current):
-            continue
-        try:
-            os.killpg(group, sig)
-            signalled.append(group)
-        except ProcessLookupError:
-            pass
-    return signalled
+    if not any(r["pgid"] == saved["pgid"] and r["state"] not in ("Z", "X") for r in rows):
+        return []
+    try:
+        os.killpg(saved["pgid"], sig)
+        return [saved["pgid"]]
+    except ProcessLookupError:
+        return []
 
 
-def cleanup(child, saved):
+@contextmanager
+def cleanup_signal_shield():
+    """Repeated stop signals cannot interrupt cleanup, audit, or final save."""
+    previous = {sig: signal.signal(sig, signal.SIG_IGN) for sig in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
+def _cleanup(child, saved):
     record = {"signals": []}
     live = lambda: [r for r in session_members(saved) if r["state"] not in ("Z", "X")]
+    record["observed_other_pgid_members"] = [r for r in live() if r["pgid"] != saved["pgid"]]
     for sig in (signal.SIGTERM, signal.SIGKILL):
-        if not live():
+        if not any(r["pgid"] == saved["pgid"] for r in live()):
             break
-        record["signals"].append({"signal": int(sig), "pgids": signal_session(saved, sig)})
+        record["signals"].append({"signal": int(sig), "pgids": signal_primary_group(saved, sig)})
         deadline = time.monotonic() + 10
-        while live() and time.monotonic() < deadline:
+        while any(r["pgid"] == saved["pgid"] for r in live()) and time.monotonic() < deadline:
             time.sleep(0.1)
     # Audit BEFORE wait/reap. Never signal a numeric PID/PGID afterward.
     record["remaining_live_session_members"] = live()
+    record["remaining_live_other_pgid_members"] = [
+        r for r in record["remaining_live_session_members"] if r["pgid"] != saved["pgid"]
+    ]
     record["leader_exited_before_reap"] = child_exited(child)
     if record["leader_exited_before_reap"]:
         record["exit_code"] = child.wait(timeout=1)
     record["cleanup_complete"] = (
         not record["remaining_live_session_members"] and record["leader_exited_before_reap"]
     )
+    record["parent_cleanup_required"] = not record["cleanup_complete"]
     return record
+
+
+def cleanup(child, saved):
+    with cleanup_signal_shield():
+        return _cleanup(child, saved)
 
 
 def gpu_apps(gpu):
@@ -172,7 +187,7 @@ def supervise(args, script):
         status="started_NOT_qualified",
         samples=[],
         initial_GPU_apps=initial,
-        guard_scope="same UID, same new SID, visible container /proc; new-SID descendants excluded",
+        guard_scope="Primary PGID signals only; same UID/SID other PGIDs audit-only; visible container /proc; new-SID descendants excluded",
     )
     for name in SOURCE_FILES:
         destination = out / "sources" / name
@@ -244,32 +259,39 @@ def supervise(args, script):
     except BaseException:
         record["error"] = traceback.format_exc()
     finally:
-        if child is not None and saved is not None:
-            try:
-                record["cleanup"] = cleanup(child, saved)
-            except BaseException:
-                record["cleanup_error"] = traceback.format_exc()
-        record["source_sha256_after"] = {name: sha256_file(REPO / name) for name in SOURCE_FILES}
-        record["sources_unchanged"] = record["source_sha256_after"] == record["source_sha256"]
-        result = out / "report.json"
-        if result.exists():
-            record["report_sha256"] = sha256_file(result)
-        clean = record.get("cleanup", {}).get("cleanup_complete", False)
-        code = record.get("cleanup", {}).get("exit_code")
-        if (
-            clean
-            and code in (0, 2)
-            and not record.get("stopped_reason")
-            and not record.get("error")
-            and record["sources_unchanged"]
-        ):
-            record["status"] = "diagnostics_collected_NOT_model_or_performance_qualified"
-        else:
-            record["status"] = "failed_or_stopped_NOT_qualified"
-        record["elapsed_seconds_NOT_benchmark"] = time.monotonic() - start
-        save()
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
+        try:
+            with cleanup_signal_shield():
+                if child is not None and saved is not None:
+                    try:
+                        record["cleanup"] = cleanup(child, saved)
+                    except BaseException:
+                        record["cleanup_error"] = traceback.format_exc()
+                record["source_sha256_after"] = {
+                    name: sha256_file(REPO / name) for name in SOURCE_FILES
+                }
+                record["sources_unchanged"] = (
+                    record["source_sha256_after"] == record["source_sha256"]
+                )
+                result = out / "report.json"
+                if result.exists():
+                    record["report_sha256"] = sha256_file(result)
+                clean = record.get("cleanup", {}).get("cleanup_complete", False)
+                code = record.get("cleanup", {}).get("exit_code")
+                if (
+                    clean
+                    and code in (0, 2)
+                    and not record.get("stopped_reason")
+                    and not record.get("error")
+                    and record["sources_unchanged"]
+                ):
+                    record["status"] = "diagnostics_collected_NOT_model_or_performance_qualified"
+                else:
+                    record["status"] = "failed_or_stopped_NOT_qualified"
+                record["elapsed_seconds_NOT_benchmark"] = time.monotonic() - start
+                save()
+        finally:
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
     if record["status"].startswith("diagnostics_collected"):
         return code
     return 1

@@ -88,6 +88,7 @@ def plan(args):
         "physical_GPU": args.gpu,
         "limits": LIMITS,
         "limit_enforcement": "Sampled external session/GPU guard; 6 GiB Torch allocator cap. Not a hard OS RSS limit.",
+        "cleanup_policy": "WNOWAIT-protected primary PGID only; other PGIDs are audit-only and surviving members require parent cleanup; new SID excluded",
         "versions_required": PINNED_VERSIONS,
         "config_sha256_required": CONFIG_SHA256,
         "historical_gate_source_sha256_required": HISTORICAL_GATE_SHA256,
@@ -176,6 +177,23 @@ def assert_inputs_unchanged(captured, fixed, cache=None, cache_before=None):
     current = {key: tensor_record(captured[key]) for key in fixed}
     if current != fixed or (cache is not None and tensor_record(cache) != cache_before):
         raise CapturedInputMutation("Candidate mutated shared captured input bytes")
+
+
+def invoke_immutable_candidate(function, captured, fixed, cache, cache_before, synchronize=None):
+    """Check before the call and after success OR exception, before any next call.
+
+    A mutating candidate cannot hide its write behind an unrelated exception.
+    The optional synchronization also runs on the exception path for GPU work.
+    """
+    assert_inputs_unchanged(captured, fixed, cache, cache_before)
+    try:
+        return function(cache)
+    finally:
+        try:
+            if synchronize is not None:
+                synchronize()
+        finally:
+            assert_inputs_unchanged(captured, fixed, cache, cache_before)
 
 
 def historical_gate(actual, reference, label):
@@ -640,11 +658,16 @@ def worker(args):
                         report["nan_tail_diagnostic"] if mode == "nan_latent" else report["cases"]
                     )
                     try:
-                        actual = function(cache)
-                        torch.cuda.synchronize(device)
+                        actual = invoke_immutable_candidate(
+                            function,
+                            captured,
+                            fixed,
+                            cache,
+                            cache_before,
+                            synchronize=lambda: torch.cuda.synchronize(device),
+                        )
                         if actual.dtype != torch.bfloat16 or actual.shape != reference.shape:
                             raise RuntimeError("Candidate output shape/BF16 contract mismatch")
-                        assert_inputs_unchanged(captured, fixed, cache, cache_before)
                         finite = bool(torch.isfinite(actual).all())
                         entry.update(
                             execution_status=(
