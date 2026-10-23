@@ -178,6 +178,7 @@ from batchgen.batch_order import (
 	prefill_sequence_spans_to_global_seq_ids,
 )
 from batchgen.memfd import create_memfd
+from batchgen.worker_skeleton import load_worker_skeleton
 from batchgen.query_book import (
 	QueryBook,
 	QueryBookEntry as query,
@@ -1078,7 +1079,9 @@ class BatchGenWorker:
 		# /proc/<server pid>/fd/<N> — nothing named to leave behind on a crash.
 		if args.skeleton_state_dict_file:
 			logging.info(f"Rank {args.global_rank}: Loading skeleton state dict from {args.skeleton_state_dict_file}")
-			self.skeleton_state_dict = torch.load(args.skeleton_state_dict_file)
+			self.skeleton_state_dict = load_worker_skeleton(
+				args.skeleton_state_dict_file, args.model_name
+			)
 			logging.info(f"Rank {args.global_rank}: Loaded skeleton state dict with {len(self.skeleton_state_dict)} keys")
 		else:
 			self.skeleton_state_dict = None
