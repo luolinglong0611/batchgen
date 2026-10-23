@@ -64,8 +64,11 @@ whose combined receipt SHA is
 - `server_args.py:1267` rejects explicit `bf16`/`bfloat16` for `trtllm_mla`, even
   though general CLI help lists them. The plan keeps `--kv-cache-dtype auto`
   with `--dtype bfloat16`; `model_runner.py:1547` selects model dtype unless a
-  KV FP8 quantization mode overrides it. **Every rank must report effective
-  `torch.bfloat16` before accepting the candidate.**
+  KV FP8 quantization mode overrides it. Record direct dtype observations and
+  source-derived expectations separately. This release logs the KV dtype only
+  on TP rank0; absent logs on the other15 ranks are missing direct evidence,
+  not evidence of a different dtype or a service failure. The executor does
+  not stop a candidate because those log lines are absent.
 - `model_runner.py:1355` budgets remaining KV memory after model loading as
   available memory minus total capacity times `(1 - mem_fraction_static)`.
   Fraction0.90 does not dedicate90% to KV alone. No `--max-total-tokens` is
@@ -90,9 +93,54 @@ inherited BatchGen runtime preloads and CUDA compiler overrides. This tool's
 SGLang source receipt and routing pins remain unchanged. Candidate A/B commands,
 capacity choices, and exact allowlisted environments retain their existing
 settings. A new diagnostic preparation must generate new source-bound receipts;
-historical diagnostic receipts are not rewritten or replayed. There is still
-no executor for these formal candidate JSON files: the diagnostic executor
-rebuilds its own small-capacity plan and is not a formal-candidate runner.
+historical diagnostic receipts are not rewritten or replayed. The separate
+formal adapter below consumes reconstructed formal candidate JSON; the original
+diagnostic executor continues to rebuild its own small-capacity plan.
+
+## Explicit formal preparation and execution
+
+`execute_sglang_formal_candidate.py` is a fixed-experiment adapter, defaulting
+to local plan-only. Supply `--candidate-plan`, its explicit
+`--expected-plan-sha256`, `--source-audit`, physical `--node-rank`, a fresh
+`--cohort-id` and an exclusive absolute `--run-dir` under the fixed experiment
+root. It reconstructs the entire candidate from SHA-pinned provider/planner and
+frozen semantic-source/help files, rather than accepting arbitrary argv/env.
+It can be staged as a byte-identical private bundle outside the repository:
+keep its seven pinned companion files beside it, and explicitly point
+`--source-audit` to the receipt plus five exported source/help files. This is
+not a general installer or an authorization to use another machine/model.
+
+Only after parent-owned resource release and separate admission, use
+`--prepare` on both containers, exchange the resulting fresh `receipt.json`,
+then explicitly use `--execute --peer-receipt ...
+--expected-peer-receipt-sha256 ...`. Preparation performs CPU artifact checks,
+one eight-device idle snapshot, >=850GiB available CPU memory, local port
+checks, and own core-filter0/soft-core-limit0 plus local-disk preflight. Ports
+are checked, not reserved; disk probing does not prove future project quota.
+Execution checks both node plan digests, source/cohort binding, <=600s receipt
+ages, disjoint GPU inventories, and immediate local source/core/memory checks.
+Old diagnostic receipts cannot authorize a formal candidate.
+
+The service environment is exactly the candidate allowlist, including RAS0
+and SG's own CUDA/runtime paths; no ambient BG preload, compiler setting or
+credential is inherited. CPU inspection/probe children additionally hide CUDA.
+Start the outer executor itself in a clean environment; an ELF preload cannot
+be removed after process startup. It explicitly rejects ambient `LD_PRELOAD`.
+The pinned diagnostic monitor/cleanup is reused: 7200s startup, >=128GiB host
+memory while running, WNOWAIT leader observation and primary-PG cleanup before
+reaping. Other groups in the original SID are audited for parent cleanup;
+descendants escaping to a new SID are outside that audit. Parent coordinates
+the peer on any node failure. No identity scan/signal occurs after child reap,
+including final receipt-write errors.
+
+Each new record carries `formal_receipt_schema=r1-sglang-formal-execution-v1`,
+the same `formal_binding`, physical node and role. A uses the real node0 server
+and node1's local dummy plus real node0 health/model checks. B requires both
+nodes' full-server marker and each local R1 health/model identity; node1 dummy
+readiness cannot satisfy B. READY proves initialization/HTTP only. It neither
+submits requests nor qualifies quality, actual per-rank KV capacity, tuning or
+performance. Separate collectors must retain missing direct dtype evidence
+and actual per-DP capacities without inventing unobserved rank values.
 
 ## Admission and fair measurement still required
 
