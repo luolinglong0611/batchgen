@@ -26,6 +26,8 @@ class DiagnosticLaunchTest(unittest.TestCase):
                 self.assertNotIn(flag, cmd)
             self.assertEqual(env['BATCHGEN_R1_SM103_ATTENTION'], 'triton_precision')
             self.assertEqual(env['BATCHGEN_W8A16_DEQUANT'], '0')
+            self.assertEqual(env['BATCHGEN_ENABLE_ALL_TO_ALL'], '0')
+            self.assertEqual(env['GLOO_SOCKET_IFNAME'], 'eth0')
 
     def test_only_current_http_cli_arguments(self):
         tree = ast.parse((ROOT / 'batchgen/server/server_args.py').read_text())

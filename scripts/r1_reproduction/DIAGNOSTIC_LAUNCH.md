@@ -48,3 +48,11 @@ cd "$ROOT/repo"
 静态预算至少 675+64+1=740 GiB，1 TiB名义剩余284 GiB还需供 worker Python/native、页表、metadata、临时 pinned buffers、NCCL/UCX及其他容器进程使用。R1 PS名字解析已使用 meta skeleton，worker空大权重 skeleton已验证，避免另一份671B浮点模型；native加载采用O_DIRECT直接写memfd、非整模型Python中间副本，但8worker初始化与运行时仍可能分配暂存。逐分片hash会产生可回收文件缓存；不可把cache峰值直接等同不可回收anon内存。
 
 不要按8worker RSS简单相加推断真实物理占用（共享页重复计入）；应同时记录容器cgroup memory.current/peak/events、anon/file/shmem、进程PSS、可用内存、每卡显存和registration耗时。GPU263–269GiB并不消除CPU675GiB常驻要求。hostKV同样anonymous memfd，不需要改 `/dev/shm` 挂载。BasePlanner仍有96GiB/H20启发式常数，双机专家布局固定但batch容量未针对B300调优；性能实验前需另审查。
+
+## 已完成的 16 卡 routed-MoE 检查
+
+2026-10-23，`moe_ep_qualification.py` 在两节点16卡通过5个场景共80个rank-case：真实7168/2048维、FP8/FP32 scales、256选8、每rank16个不同synthetic experts；均匀/不均匀tokens、空rank、全部空、全部16个expert-owner ranks与跨节点路由均覆盖。直接执行真实 `DeepseekV3MoE_Decoding_FP8.moe_infer_allgather_allreduce_bf16_acc`，使用原生router/dispatch、两阶段TMA、scatter和PyNccl，不使用通信stub。
+
+固定既有MoE composition gate未调整：最大relative L2 **0.003106992**（阈值0.02），最大abs/reference RMS **0.02835883**（0.15），最小cosine **0.999995174**（0.9998）；router专家集合完全一致。独立参考保留原始FP32blockscales和activation FP8量化，并将每rank的BF16 partial以FP32求和，从而不继承被测BF16 reduction误差。Torch与PyNccl均NCCL2.27.7。
+
+测试脚本SHA256 `2907bc9aa09748ab516c2e8f2e920d09d5179b4e6e2c886770ee2ba93c040335`，两节点所有记录的源码hash一致。远端证据各在 `$ROOT/moe-ep-v1/rankNN.json`、同名 `.pt`、`supervisor.json` 与 `$ROOT/moe-ep-v1.log`；两个supervisor和16workers退出码均0，GPU进程列表再次确认空。每卡测试peak allocated为811243008bytes。该检查不覆盖shared expert、PSM加载、host DMA、attention或完整61层，也不提供推理性能结论。
