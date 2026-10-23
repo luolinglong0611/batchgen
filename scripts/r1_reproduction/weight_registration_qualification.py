@@ -201,6 +201,8 @@ def owner(args):
         import libucx
         libucx.load_library()
         from batchgen import core_engine
+        report['core_engine_sha256'] = dma.digest(Path(core_engine.__file__))
+        report['core_engine_path'] = core_engine.__file__
         context = multiprocessing.get_context('spawn')
         barrier = context.Barrier(args.workers)
         with tempfile.TemporaryDirectory(prefix='r1-reservation-', dir=args.converted.parent) as directory:

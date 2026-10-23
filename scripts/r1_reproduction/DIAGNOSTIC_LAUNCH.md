@@ -10,12 +10,16 @@ cd "$ROOT/repo"
 "$ROOT/env/bin/python" scripts/r1_reproduction/launch_r1_diagnostic.py --node-rank 0 --run-id r1-diagnostic-v1
 ```
 
-节点 1 使用 `--node-rank 1`。实际执行在各自已认证容器内追加 `--execute`，先节点 0 后节点 1；两边尽快启动，分别把 stdout/stderr 保存到新日志。每个节点执行前逐分片重读约 641 GiB 并核对 SHA256，耗时计入加载准备，不计入推理性能。不要在这些检查完成前发送请求。
+节点 1 使用 `--node-rank 1`。实际执行在各自已认证容器内追加 `--execute`，并必须显式给出该节点真实通过的 native 注册报告 `--registration-qualification`。先节点 0 后节点 1；两边尽快启动，分别把 stdout/stderr 保存到新日志。每个节点执行前逐分片重读约 641 GiB 并核对 SHA256，耗时计入加载准备，不计入推理性能。不要在这些检查完成前发送请求。
 
 ```bash
 # node0 容器；node1 同命令改为 --node-rank 1 及新的本地日志文件名
+# REGISTRATION_REPORT 必须指向本节点实际通过且已完成 cleanup 后置核验的报告。
+# 不能使用 driver probe、单worker、小reservation或另一节点的报告。
+: "${REGISTRATION_REPORT:?请设置本节点真实通过的 native 注册报告绝对路径}"
 "$ROOT/env/bin/python" scripts/r1_reproduction/launch_r1_diagnostic.py \
   --node-rank 0 --run-id r1-diagnostic-v1 --execute \
+  --registration-qualification "$REGISTRATION_REPORT" \
   > "$ROOT/r1-diagnostic-v1-node0.log" 2>&1
 ```
 
@@ -28,10 +32,23 @@ cd "$ROOT/repo"
 - `--model deepseek-ai/DeepSeek-R1` 保留真实注册表 config、675 GiB reservation 与原生 tokenizer。`--cache-dir` 是已下载原版 FP8 目录；不使用 `--model 本地路径`，不再量化，不将模型整体转换 BF16。转换 receipt 要求 `marlin=false`、固定原始 revision、当前审查 converter SHA 和完整输出 hash。
 - `world-size=16, nnodes=2`，每节点 8 worker。BasePlanner 默认 EP，双机 attention mode 3，256/16=16 个 routed experts/层/rank，DP attention 与 replicated shared experts。无需额外 EP flag；`enable-ep-with-offloading` 是另一项部分专家 offload 实验，此轮关闭。推理仍有 prefill/decode 阶段权重和 KV 的迁移。
 - `host-kv-cache-size=64` 是每节点共享的 **64 GiB**，源码乘 `1024**3`，不应再乘 8。KV BF16、CUDA graphs 关闭、prefix cache 关闭、DeepEP 关闭；原生 NCCL EP 路径。输入 token pool 显式 1 GiB（默认 50 GiB）；保留 prepack 与正常阶段调度。GPU memory frac 0.85 是诊断值，未调优。
+- `BATCHGEN_HOST_REGISTER_CHUNK_GIB=16` 显式启用 native tensor-aware 注册。切点必须落在页边界且不能切断任何原始 tensor；这不减少675 GiB的CPU权重常驻空间。默认整体一次注册在此环境失败，纯driver分段注册成功也不能替代 native storage/DMA 资格。
 - NCCL 使用已验证 eth0 / RoCE GID3 / 8 个 mlx5_bond HCA。脚本继承并记录外部 UCX 环境，不擅自添加未经验证的 UCX transport；正式执行前应采用实际 KV migration 已通过的 UCX 配置。
 - HTTP 每节点 10900；协调地址 `10.66.9.163:34155`，restart control `:34156`，PyNccl 34200–34299。端口有冲突时正常参数校验失败，不自动杀服务/改端口。客户端只访问节点0 `http://10.66.9.163:10900`。
 
 节点0需要部署最新 **clean** R1 runtime_preflight 版本并复核：不要复制本地含未提交 Kimi 用户改动的整份文件。相同要求适用于其他有用户改动的源码；用受审查 commit/单独 patch。脚本记录启动时所有 batchgen Python 源文件 hash 和 git commit，但记录不是自动证明两节点一致，执行前应比较。AOT `.so` 由正常 preflight 校验。
+
+## Native 注册报告的启动门槛
+
+`--registration-qualification` 指向顶层 JSON，8个同目录 `.gpu0.json` 至 `.gpu7.json` 必须一并保留。检查不会通过更改报告来补齐未测项目：证据不足应实际重跑相应资格。顶层必须满足：
+
+- `status="passed"`，`hostname` 与当前节点一致，`registration_mode="native"`，`native_register_chunk_gib=16`，`reservation_bytes=724775731200`（675 GiB），`worker_count=8`，`hugetlbfs=false`、`thp=false`。
+- `core_engine_path` 是当前repo/batchgen中唯一core_engine*.so，`core_engine_sha256` 匹配当前文件；8个子报告各自记录的实际 `core_engine` 路径及 `core_engine_sha256` 也须匹配。权重检查后、启动前再次检查小型native库哈希，防止期间换库。
+- `clean_native_release=true` 只能由实际日志后置核验产生：8worker与owner共9条释放记录、8个worker注册ranges>0、全部cudaHostUnregister和munmap返回0。缺失该字段即拒绝，不把owner顶层passed当作释放成功证明。
+- `derived_fixture` 必须描述完整原始首分片加稀疏前缀后，一个大于4MiB的原始tensor严格跨过名义16GiB切点。`copied_source_sha256` 匹配已验证首分片bin receipt；原metadata哈希及重建后的 `derived_metadata_sha256` 匹配，tensor位置与大小符合原metadata+prefix。
+- `workers` 中8个独立PID、退出码0、status passed、barrier true、tensor_count270；子报告覆盖GPU0–7，270个tensor全部host_registered/host_exact/roundtrip_exact=true，dtype/shape/bytes符合原始metadata且8worker逐tensor哈希一致。只读顶层summary不足以通过检查。
+
+这些门槛验证675GiB保留区、8worker注册和跨名义切点的真实tensor DMA，不宣称已加载完整163分片。完整加载仍由后续明确的诊断启动执行。CPU测试中的临时模拟JSON仅测试拒绝逻辑，不属于GPU资格证据。
 
 ## API 与 tokenizer
 

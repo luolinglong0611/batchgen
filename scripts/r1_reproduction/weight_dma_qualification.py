@@ -89,7 +89,8 @@ def worker_main(settings):
         torch.cuda.set_device(0)
         report.update(torch=torch.__version__, cuda=torch.version.cuda,
                       device=torch.cuda.get_device_name(0), logical_device=0,
-                      physical_gpu=settings['physical_gpu'], core_engine=core_engine.__file__)
+                      physical_gpu=settings['physical_gpu'], core_engine=core_engine.__file__,
+                      core_engine_sha256=digest(Path(core_engine.__file__)))
         for fd_name in ('weights_fd', 'metadata_fd'):
             fd_path = Path(f"/proc/{settings['owner_pid']}/fd/{settings[fd_name]}")
             if not fd_path.exists():

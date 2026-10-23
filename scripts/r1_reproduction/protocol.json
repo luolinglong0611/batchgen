@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "r1_native_runtime_built_weights_downloading_numerical_qualification_in_progress",
+  "status": "all_original_R1_weights_converted_native_tensor_registration_validation_pending",
   "model": "deepseek-ai/DeepSeek-R1",
   "model_revision": "20f2865710d161dc4a32c4e8c3d7c42c7b9852f8",
   "paper_reference": {
@@ -325,7 +325,9 @@
     "total_bytes": 688604361453,
     "weight_file_revision": "20f2865710d161dc4a32c4e8c3d7c42c7b9852f8",
     "pinning": "per-file Revision, Size, Sha256 from repository API; metadata files may have distinct revisions",
-    "download_verified": false
+    "download_verified": false,
+    "download_status": "complete: 163/163 verified original shards shared via OSS",
+    "conversion_status": "complete: 163/163 shards on each node; per-shard source, binary and metadata hashes recorded"
   },
   "adaptation_gates": {
     "python": "isolated3.11.15 installed both nodes",
@@ -345,9 +347,10 @@
     "templates_revision": "2e00731f8d0bff23dc4325161044d0ed8af94c1e",
     "templates_sha256": "56d22ad4f382169c2b8a11ff4c982a4a1bea096c8152b0f0b85b64686b157c30",
     "workload_generated": true,
-    "workload_scope": "16 unique samples for smoke, both exact-length profiles; formal6000 with-replacement workload generation in progress",
+    "workload_scope": "formal 6000/profile generated with replacement from2212eligible samples;2046unique;runtime output length still unqualified",
     "smoke_manifest_sha256": "e25a61db23fd217f89bbc482aa27db5b5cd96a0abe4ef6b65279e8bd306e4063",
-    "eligible_samples": 2212
+    "eligible_samples": 2212,
+    "formal_manifest_sha256": "8dc0c57dbe130c496b85cbe5563ca71df7d58638d7ad9ae5b7044d9e3945baa7"
   },
   "native_loader_qualification": {
     "status": "passed",
@@ -441,5 +444,51 @@
       "core_engine_AOT_freshness"
     ],
     "legacy_unused_GQA_note": "R1-specific contract excludes SM90 GQA artifact; other models retain original dependency checks"
+  },
+  "moe_ep_qualification": {
+    "status": "passed",
+    "report_directory": "moe-ep-v1",
+    "ranks": 16,
+    "cases_per_rank": 5,
+    "passed_cases": 80,
+    "relative_l2_max": 0.003106992,
+    "max_abs_over_rms_max": 0.02835883,
+    "cosine_min": 0.999995174,
+    "scope": "actual R1 decode MoE gate, fused dispatch, grouped FP8 GEMM, scatter and cross-node PyNccl; all16owner ranks, local expert slots2/14, empty and unbalanced ranks; excludes shared expert, host DMA, attention and full model"
+  },
+  "cross_node_kv_qualification": {
+    "status": "passed",
+    "report": "kv-migration-v6.json",
+    "ranks": 2,
+    "layers": 61,
+    "sequence_lengths": [
+      1,
+      65,
+      2048,
+      8192
+    ],
+    "dtype": "BF16",
+    "comparison": "exact roundtrip GPU-CPU-cross-node Gloo-CPU-GPU",
+    "scope": "real worker migration method and QueryBook; excludes full scheduler and model"
+  },
+  "native_registration_qualification": {
+    "status": "pending_native_tensor_aware_validation",
+    "reservation_gib": 675,
+    "whole_region_1_worker": "failed cudaHostRegister memory allocation",
+    "whole_region_8_workers": "failed cudaHostRegister memory allocation",
+    "driver_chunk_8_workers": "all registrations succeeded; cross-boundary DMA failed cudaErrorInvalidValue",
+    "adaptation": "opt-in16GiB max regions with page-aligned cuts avoiding every tensor; native CPU sanitizer/tests passed; built; awaiting real8worker DMA",
+    "prior_reports": [
+      "weight-registration-v1.json",
+      "weight-registration-single-v2.json",
+      "weight-registration-chunked-v3.json",
+      "weight-registration-chunked8-v4.json"
+    ]
+  },
+  "full_model_reproduction": {
+    "weights_loaded": false,
+    "forward_executed": false,
+    "performance_benchmark_executed": false,
+    "speedup_established": false
   }
 }

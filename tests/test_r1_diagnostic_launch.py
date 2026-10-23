@@ -1,7 +1,12 @@
 """CPU-only launch-plan contract checks; no torch or runtime imports."""
 import ast
 import importlib.util
+import hashlib
+import json
 from pathlib import Path
+import subprocess
+import sys
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +33,7 @@ class DiagnosticLaunchTest(unittest.TestCase):
             self.assertEqual(env['BATCHGEN_W8A16_DEQUANT'], '0')
             self.assertEqual(env['BATCHGEN_ENABLE_ALL_TO_ALL'], '0')
             self.assertEqual(env['GLOO_SOCKET_IFNAME'], 'eth0')
+            self.assertEqual(env['BATCHGEN_HOST_REGISTER_CHUNK_GIB'], '16')
 
     def test_only_current_http_cli_arguments(self):
         tree = ast.parse((ROOT / 'batchgen/server/server_args.py').read_text())
@@ -37,6 +43,124 @@ class DiagnosticLaunchTest(unittest.TestCase):
                     if isinstance(arg, ast.Constant) and isinstance(arg.value, str)}
         _, cmd = launch.plan(launch.ROOT, 0, 'contract-v1')
         self.assertTrue(set(token for token in cmd if token.startswith('--')) <= accepted)
+
+
+class RegistrationEvidenceGateTest(unittest.TestCase):
+    """Ephemeral fake files test validation only; never valid GPU evidence."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / 'repo/batchgen').mkdir(parents=True)
+        (self.root / 'converted').mkdir()
+        (self.root / 'converted.receipts').mkdir()
+        self.core = self.root / 'repo/batchgen/core_engine.unit_test.so'
+        self.core.write_bytes(b'Not a native library: CPU validator fixture only')
+        self.path = self.root / 'registration-unit-test.json'
+        self.metadata = {'total_byte_size': 8 * 1024**2 + 272, 'state_dict': {}}
+        offset = 0
+        for i in range(270):
+            size, dtype = (8 * 1024**2, 'bfloat16') if i == 0 else ((4, 'float32') if i == 1 else (1, 'float8_e4m3fn'))
+            self.metadata['state_dict'][f'tensor{i}'] = {'offset': offset, 'byte_size': size, 'dtype': dtype,
+                                                       'shape': [size // (2 if i == 0 else 4 if i == 1 else 1)]}
+            offset += size
+        self.metadata['total_byte_size'] = offset
+        stem = 'model-00001-of-000163'
+        meta_path = self.root / 'converted' / (stem + '.json')
+        meta_path.write_text(json.dumps(self.metadata))
+        fake_source_sha = hashlib.sha256(b'unit-test source placeholder').hexdigest()
+        receipt = {'validation': {'binary_sha256': fake_source_sha, 'metadata_sha256': launch.digest(meta_path)}}
+        (self.root / 'converted.receipts' / (stem + '.safetensors.converted.json')).write_text(json.dumps(receipt))
+        prefix = 16 * 1024**3 - 2 * 1024**2
+        derived = json.loads(json.dumps(self.metadata))
+        for item in derived['state_dict'].values():
+            item['offset'] += prefix
+        derived['total_byte_size'] += prefix
+        self.data = {'status': 'passed', 'hostname': launch.HOSTS[0], 'registration_mode': 'native',
+                     'native_register_chunk_gib': 16, 'reservation_bytes': 675 * 1024**3,
+                     'worker_count': 8, 'hugetlbfs': False, 'thp': False, 'clean_native_release': True,
+                     'core_engine_path': str(self.core), 'core_engine_sha256': launch.digest(self.core),
+                     'derived_fixture': {'kind': 'shifted original tensor bytes with sparse zero prefix',
+                         'prefix_bytes': prefix, 'nominal_boundary': 16 * 1024**3,
+                         'crossing_tensor': 'tensor0', 'tensor_start': prefix, 'tensor_bytes': 8 * 1024**2,
+                         'copied_source_sha256': fake_source_sha,
+                         'derived_metadata_sha256': hashlib.sha256(json.dumps(derived).encode()).hexdigest()},
+                     'workers': []}
+        for gpu in range(8):
+            child_path = self.path.with_suffix(f'.gpu{gpu}.json')
+            tensors = [{'name': name, 'shape': m['shape'], 'bytes': m['byte_size'], 'dtype': m['dtype'],
+                        'sha256': hashlib.sha256(name.encode()).hexdigest(), 'host_registered': True,
+                        'host_exact': True, 'roundtrip_exact': True} for name, m in self.metadata['state_dict'].items()]
+            child = {'pid': 1000 + gpu, 'physical_gpu': gpu, 'status': 'passed',
+                     'simultaneous_registration_barrier_passed': True, 'tensor_count': 270,
+                     'core_engine': str(self.core), 'core_engine_sha256': launch.digest(self.core), 'tensors': tensors}
+            child_path.write_text(json.dumps(child))
+            self.data['workers'].append({'pid': 1000 + gpu, 'report': str(child_path), 'status': 'passed',
+                                        'exit_code': 0, 'simultaneous_registration_barrier_passed': True,
+                                        'tensor_count': 270})
+
+    def validate(self):
+        self.path.write_text(json.dumps(self.data))
+        return launch.validate_registration_qualification(self.root, 0, self.path)
+
+    def test_complete_evidence_and_core_fingerprint(self):
+        result = self.validate()
+        self.assertEqual(result['core_engine_sha256'], launch.digest(self.core))
+        self.assertEqual(len(result['worker_report_sha256']), 8)
+        self.core.write_bytes(b'different build')
+        with self.assertRaisesRegex(RuntimeError, 'SHA256'):
+            self.validate()
+
+    def test_missing_or_weaker_owner_evidence_rejected(self):
+        for key, wrong in [('status', 'failed'), ('registration_mode', 'chunked_driver_probe'),
+                           ('reservation_bytes', 32 * 1024**3), ('worker_count', 1),
+                           ('native_register_chunk_gib', 0), ('clean_native_release', False),
+                           ('hostname', launch.HOSTS[1]), ('hugetlbfs', True), ('thp', True)]:
+            with self.subTest(field=key):
+                old = self.data[key]
+                self.data[key] = wrong
+                with self.assertRaises(RuntimeError):
+                    self.validate()
+                self.data[key] = old
+        del self.data['clean_native_release']
+        with self.assertRaisesRegex(RuntimeError, 'postvalidation'):
+            self.validate()
+
+    def test_shifted_fixture_required_and_bound_to_original(self):
+        for key, wrong in [('tensor_start', 16 * 1024**3), ('copied_source_sha256', '0' * 64),
+                           ('derived_metadata_sha256', '0' * 64), ('prefix_bytes', 1),
+                           ('crossing_tensor', 'absent')]:
+            with self.subTest(field=key):
+                old = self.data['derived_fixture'][key]
+                self.data['derived_fixture'][key] = wrong
+                with self.assertRaises(RuntimeError):
+                    self.validate()
+                self.data['derived_fixture'][key] = old
+
+    def test_each_worker_must_have_real_dma_and_matching_core(self):
+        child_path = self.path.with_suffix('.gpu7.json')
+        original = json.loads(child_path.read_text())
+        for key, wrong in [('status', 'failed'), ('simultaneous_registration_barrier_passed', False),
+                           ('physical_gpu', 0), ('tensor_count', 269), ('core_engine_sha256', '0' * 64)]:
+            with self.subTest(field=key):
+                child = dict(original, **{key: wrong})
+                child_path.write_text(json.dumps(child))
+                with self.assertRaises(RuntimeError):
+                    self.validate()
+        child = json.loads(json.dumps(original))
+        child['tensors'][0]['roundtrip_exact'] = False
+        child_path.write_text(json.dumps(child))
+        with self.assertRaisesRegex(RuntimeError, 'byte comparison'):
+            self.validate()
+        child_path.unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.validate()
+
+    def test_execute_requires_explicit_evidence_before_any_runtime_import(self):
+        result = subprocess.run([sys.executable, str(ROOT / 'scripts/r1_reproduction/launch_r1_diagnostic.py'),
+                                 '--node-rank', '0', '--execute'], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('--execute requires --registration-qualification', result.stderr)
 
 
 if __name__ == '__main__':

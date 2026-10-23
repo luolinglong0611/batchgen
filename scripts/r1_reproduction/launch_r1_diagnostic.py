@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import signal
 import socket
@@ -43,6 +44,7 @@ def plan(root, rank, run_id):
         'BATCHGEN_R1_SM103_ATTENTION': 'triton_precision',
         'DISABLE_MMA_V5': '1', 'TORCH_CUDA_CHANNEL': 'cu130',
         'BATCHGEN_W8A16_DEQUANT': '0',
+        'BATCHGEN_HOST_REGISTER_CHUNK_GIB': '16',
         'BATCHGEN_ENABLE_ALL_TO_ALL': '0', 'GLOO_SOCKET_IFNAME': 'eth0',
         'NCCL_SOCKET_IFNAME': 'eth0', 'NCCL_IB_GID_INDEX': '3',
         'NCCL_IB_HCA': '=' + ','.join(f'mlx5_bond_{i}:1' for i in range(8)),
@@ -64,6 +66,118 @@ def plan(root, rank, run_id):
                '--disable-cuda-graphs', '--storage-path', str(root / 'runs' / run_id / f'node{rank}' / 'storage'),
                '--save-result']
     return env, command
+
+
+def validate_registration_qualification(root, rank, path):
+    """Require local, completed native evidence, not a driver-only probe.
+
+    No imports of native/PyTorch modules. Child reports are read explicitly so
+    an incomplete or stale eight-worker summary cannot authorize model loading.
+    """
+    def require(condition, message):
+        if not condition:
+            raise RuntimeError('Registration qualification: ' + message)
+
+    def read_report(report_path):
+        def unique(pairs):
+            obj = {}
+            for key, value in pairs:
+                require(key not in obj, f'duplicate JSON field {key}')
+                obj[key] = value
+            return obj
+        return json.loads(report_path.read_text(), object_pairs_hook=unique)
+
+    def integer(value):
+        return type(value) is int
+
+    def sha256(value):
+        return isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value) is not None
+
+    path = path.resolve(strict=True)
+    data = read_report(path)
+    require(data.get('status') == 'passed', 'owner report is not passed')
+    require(data.get('hostname') == HOSTS[rank], 'report belongs to another node')
+    require(data.get('registration_mode') == 'native', 'driver-only probes cannot qualify native storage')
+    require(data.get('native_register_chunk_gib') == 16, 'expected native tensor-aware chunk size 16 GiB')
+    require(data.get('reservation_bytes') == 675 * 1024**3, 'expected full 675 GiB reservation')
+    require(data.get('worker_count') == 8, 'expected eight simultaneous workers')
+    require(data.get('hugetlbfs') is False and data.get('thp') is False, 'page policy differs from launch')
+    require(data.get('clean_native_release') is True, 'missing successful native unregister/munmap postvalidation')
+    candidates = list((root / 'repo/batchgen').glob('core_engine*.so'))
+    require(len(candidates) == 1, 'expected exactly one repository core_engine native library')
+    core = candidates[0].resolve(strict=True)
+    require(core.is_relative_to((root / 'repo/batchgen').resolve()), 'core library escapes repository')
+    recorded_path = data.get('core_engine_path')
+    require(isinstance(recorded_path, str) and Path(recorded_path).resolve() == core, 'native library path mismatch')
+    core_sha = digest(core)
+    require(data.get('core_engine_sha256') == core_sha, 'native library SHA256 differs from qualification')
+
+    fixture = data.get('derived_fixture', {})
+    require(fixture.get('kind') == 'shifted original tensor bytes with sparse zero prefix', 'missing shifted real-weight fixture')
+    prefix, boundary = fixture.get('prefix_bytes'), fixture.get('nominal_boundary')
+    start, size = fixture.get('tensor_start'), fixture.get('tensor_bytes')
+    require(all(integer(v) for v in (prefix, boundary, start, size)), 'invalid shifted fixture extents')
+    require(prefix > 0 and prefix % 4096 == 0 and boundary == 16 * 1024**3,
+            'expected page-aligned shift across nominal 16 GiB cut')
+    require(size > 4 * 1024**2 and 0 <= start < boundary < start + size <= 675 * 1024**3,
+            'real tensor does not straddle the nominal cut')
+    require(sha256(fixture.get('derived_metadata_sha256')), 'missing derived metadata hash')
+    stem = 'model-00001-of-000163'
+    receipt = read_report(root / 'converted.receipts' / (stem + '.safetensors.converted.json'))
+    metadata_path = root / 'converted' / (stem + '.json')
+    metadata = read_report(metadata_path)
+    require(digest(metadata_path) == receipt['validation']['metadata_sha256'], 'first-shard metadata differs from receipt')
+    require(fixture.get('copied_source_sha256') == receipt['validation']['binary_sha256'],
+            'fixture is not from the verified original first shard')
+    original = metadata['state_dict']
+    crossing = fixture.get('crossing_tensor')
+    require(crossing in original and len(original) == 270, 'unexpected first-shard tensor set')
+    require(start == original[crossing]['offset'] + prefix and size == original[crossing]['byte_size'],
+            'shifted crossing tensor disagrees with original metadata')
+    derived = json.loads(json.dumps(metadata))
+    for tensor in derived['state_dict'].values():
+        tensor['offset'] += prefix
+    derived['total_byte_size'] += prefix
+    require(hashlib.sha256(json.dumps(derived).encode()).hexdigest() == fixture['derived_metadata_sha256'],
+            'derived metadata does not match the declared shift of the verified first shard')
+    workers = data.get('workers', [])
+    require(isinstance(workers, list) and len(workers) == 8, 'missing worker summaries')
+    child_hashes, seen_gpu, seen_pid, tensor_hashes = {}, set(), set(), None
+    for summary in workers:
+        require(summary.get('status') == 'passed' and summary.get('exit_code') == 0
+                and summary.get('simultaneous_registration_barrier_passed') is True
+                and summary.get('tensor_count') == 270, 'failed/incomplete worker summary')
+        child_path = Path(summary['report']).resolve(strict=True)
+        require(child_path.parent == path.parent, 'worker report is outside qualification directory')
+        child = read_report(child_path)
+        gpu, pid = child.get('physical_gpu'), child.get('pid')
+        require(integer(gpu) and 0 <= gpu < 8 and gpu not in seen_gpu, 'duplicate/invalid physical GPU')
+        require(child_path == path.with_suffix(f'.gpu{gpu}.json'), 'worker report filename mismatch')
+        require(integer(pid) and pid > 0 and pid not in seen_pid and pid == summary.get('pid'), 'worker PID mismatch')
+        seen_gpu.add(gpu)
+        seen_pid.add(pid)
+        require(child.get('status') == 'passed' and child.get('simultaneous_registration_barrier_passed') is True
+                and child.get('tensor_count') == 270, 'child did not complete the native barrier and DMA')
+        require(child.get('core_engine') == recorded_path, 'child used another native library path')
+        require(child.get('core_engine_sha256') == core_sha, 'child native library SHA256 mismatch')
+        tensors = child.get('tensors', [])
+        require(len(tensors) == 270 and {t.get('name') for t in tensors} == set(original), 'child tensor evidence incomplete')
+        hashes = {}
+        for tensor in tensors:
+            meta = original[tensor['name']]
+            require(tensor.get('host_registered') is True and tensor.get('host_exact') is True
+                    and tensor.get('roundtrip_exact') is True, 'tensor registration or byte comparison failed')
+            require(tensor.get('bytes') == meta['byte_size'] and tensor.get('shape') == meta['shape']
+                    and tensor.get('dtype') == meta['dtype'] and sha256(tensor.get('sha256')), 'tensor evidence differs from metadata')
+            hashes[tensor['name']] = tensor['sha256']
+        require(tensor_hashes is None or hashes == tensor_hashes, 'workers copied different tensor bytes')
+        tensor_hashes = hashes
+        child_hashes[child_path.name] = digest(child_path)
+    require(seen_gpu == set(range(8)), 'not all eight local GPUs were qualified')
+    return {'report': str(path), 'report_sha256': digest(path), 'worker_report_sha256': child_hashes,
+            'core_engine_path': str(core), 'core_engine_sha256': core_sha,
+            'native_register_chunk_gib': 16, 'reservation_bytes': 675 * 1024**3,
+            'worker_count': 8, 'clean_native_release': True, 'derived_fixture': fixture}
 
 
 def validate_weights(root):
@@ -109,6 +223,8 @@ def main():
     parser.add_argument('--node-rank', type=int, choices=(0, 1), required=True)
     parser.add_argument('--root', type=Path, default=ROOT)
     parser.add_argument('--run-id', default='r1-diagnostic-v1')
+    parser.add_argument('--registration-qualification', type=Path,
+                        help='Required for --execute: local passed native 675GiB/8worker/shifted-tensor report')
     parser.add_argument('--execute', action='store_true', help='Validate and launch the full model in this allocated container')
     args = parser.parse_args()
     if not args.run_id or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_' for c in args.run_id):
@@ -120,6 +236,8 @@ def main():
     print(shlex.join(command), flush=True)
     if not args.execute:
         return 0
+    if args.registration_qualification is None:
+        parser.error('--execute requires --registration-qualification; driver-only probes are insufficient')
     if not Path('/.dockerenv').exists() or socket.gethostname() != HOSTS[args.node_rank]:
         raise RuntimeError('Execution requires the allocated container and matching node rank')
     if os.environ.get('BATCHGEN_PARAMETER_SERVER_ENDPOINT'):
@@ -132,6 +250,8 @@ def main():
              'hostname': socket.gethostname(), 'environment': env, 'command': command}
     report = report_dir / 'launch.json'
     try:
+        state['registration_qualification'] = validate_registration_qualification(
+            args.root, args.node_rank, args.registration_qualification)
         state['weights'] = validate_weights(args.root)
         state['git_commit'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=args.root / 'repo', text=True).strip()
         state['source_sha256'] = {str(p.relative_to(args.root / 'repo')): digest(p)
@@ -141,6 +261,9 @@ def main():
         report.write_text(json.dumps(state, indent=2) + '\n')
         child_env = os.environ.copy()
         child_env.update(env)
+        qualified_core = state['registration_qualification']
+        if digest(Path(qualified_core['core_engine_path'])) != qualified_core['core_engine_sha256']:
+            raise RuntimeError('Native library changed while validating weights; rerun qualification')
         # Normal entry point retains all version, native-origin, freshness and
         # tokenizer checks; no fabricated capability, fallback, or preflight skip.
         child = subprocess.Popen(command, cwd=args.root / 'repo', env=child_env,
