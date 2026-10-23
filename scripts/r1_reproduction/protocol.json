@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "status": "preparation_only_no_remote_execution",
+  "model": "deepseek-ai/DeepSeek-R1",
+  "model_revision": null,
+  "paper_reference": {
+    "url": "https://www.usenix.org/system/files/osdi26-xu-tairan.pdf",
+    "section": "6.1 / Table 3",
+    "dataset": "LongBench",
+    "sequences_as_reported": "6K",
+    "sglang_version": "0.5.5.post3",
+    "vllm_version": "0.11.2",
+    "workload_token_lengths": [[8192, 2048], [2048, 8192]],
+    "length_interpretation": "K=1024 is the campaign convention, pending original artifact verification",
+    "original_hardware": "H20/H200; this campaign targets 2x8 B300",
+    "historical_16_h20_r1_bct_minutes": {
+      "sglang_optimized": [137.0, 242.5],
+      "batchgen": [82.6, 194.3]
+    }
+  },
+  "campaign": {
+    "type": "hardware_port_and_methodology_reproduction",
+    "weight_precision": "checkpoint FP8",
+    "kv_precision_initial": "BF16",
+    "runtime_versions": null,
+    "dataset_manifest_sha256": null,
+    "formal_request_count": null,
+    "formal_request_count_note": "Resolve 6K as 6000 or 6144 from original artifacts; document explicitly if unavailable",
+    "smoke_request_counts": [1, 16],
+    "tuning_request_counts": [128, 512],
+    "baseline_topologies": ["sglang_16_gpu_single_instance", "sglang_two_8_gpu_replicas"],
+    "secondary_baseline": "vllm",
+    "warm_repetitions_min": 3,
+    "primary_metric": "wall time from submission start through all requests completed",
+    "include_in_primary_timing": ["submission", "queueing", "prefill", "decode"],
+    "exclude_from_primary_timing": ["model download", "model load", "initial compilation", "warmup"],
+    "required_recording": ["actual input/output tokens", "request failures", "quality", "runtime commits", "launch arguments", "memory peaks", "hardware inventory"],
+    "fixed_length_test": "Enable only after both engines demonstrate equivalent EOS/length enforcement",
+    "real_task_test": "Allow EOS; compare actual lengths and quality alongside completion time",
+    "speculative_decoding_initial": false,
+    "prefix_reuse_initial": false,
+    "release_gates": ["container identity and resource inventory", "model revision verified", "SM103 attention and MoE correctness", "two-node communication", "end-to-end smoke", "KV transfer correctness", "baseline tuning", "formal benchmark"]
+  },
+  "operational_rules": {
+    "remote_execution": "allocated containers only",
+    "remote_agent_installation": false,
+    "browser_authentication": false,
+    "existing_jobs": "do not terminate or alter",
+    "persistence": "commit source changes; sync private raw outputs to user's designated persistent storage",
+    "stop": "stop experiment work immediately when requested"
+  }
+}
