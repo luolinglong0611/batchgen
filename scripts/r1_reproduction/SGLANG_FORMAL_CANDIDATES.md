@@ -5,8 +5,9 @@ services, contacts the containers, queries GPUs or sends requests. It leaves
 the diagnostic launcher/executor and frozen QA/6000-request workload untouched.
 Candidate A completed a twelve-request functional diagnostic. Its first
 32-request fixed-length attempt failed during MoE prefill, and both services
-have been stopped. Kernel-boundary investigation is in progress; no candidate
-is admitted for the formal 6000-request performance comparison yet.
+have been stopped. An isolated test reproduced the native MoE launch boundary,
+and a smaller-chunk candidate has started. No candidate is admitted for the
+formal 6000-request performance comparison yet.
 
 The identity remains `sglang0.5.5.post3+R1-routing-compat`, using the original
 R1 FP8 weights and F32 block scales. The R1 routing compatibility patch and the
@@ -230,8 +231,8 @@ Its FP8 activation launcher sets `grid.z = data.numTokens` at line176, while
 [CUDA limits the grid y/z dimensions to65535](https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html).
 Source analysis predicts that16 DP prefill chunks of4096 can gather65536
 tokens for the MoE call. The failing service did not directly trace that
-call's token count; this is a supported boundary hypothesis awaiting an
-isolated kernel reproduction, not a recorded runtime shape. The activation
+call's token count; this remains a source-derived shape, although the same
+launch boundary was subsequently reproduced in isolation below. The activation
 kernel already contains a grid-stride token loop, but no patch is applied yet.
 
 Both original services and the client were independently checked absent;
@@ -243,3 +244,41 @@ separately from the later model-service cleanup evidence. Closed-export import
 receipt SHA256 values are
 `441fd2fd925fd1dd2dba91c87d48885844d9c3f6053d3ea7ffceb8fec645a28a`
 and `5521c7be5805475b291fe546b025abb88820f41db297128fcda728d601a6dcae`.
+
+### Isolated native MoE launch boundary
+
+Three independent single-GPU processes called the unchanged FlashInfer0.5.2
+FP8 MoE function with synthetic R1 TP16-local shapes: hidden7168,
+intermediate128,256 experts and topK8. Each process explicitly recorded its
+input shape and queried SGLang's loaded CUDA13.0.48 runtime, which reported
+maximum grid Z65535. The original `tune_max_num_tokens=8192` default was kept;
+it is not treated as a runtime token limit.
+
+| Explicit input M | Activation grid derived from installed source | Observed result |
+| --- | --- | --- |
+|4096|[2,8,4096]|All output elements finite; worker exit0|
+|32768|[2,8,32768]|All output elements finite; worker exit0|
+|65536|[2,8,65536]|Same cu:178 `cudaLaunchKernelEx: invalid argument`; worker exit2|
+
+All three guards completed cleanup without signals or live session members;
+the original guard identities were absent and GPU1 returned to4MiB/0% with no
+compute processes. These synthetic TP16-local calls do not run a model service
+or TP allreduce. Finite output scans are not full numerical, model-quality or
+performance qualification. The failed full service's actual M was not captured.
+The three report SHA256 values, in ascending M order, are
+`24eb3a55c991dfc17528eb82b7ee60327e592a83634d2f5de58b56aff20dd26c`,
+`e7b4594f541d33dff440a7f6c658ca7f2353b7fa423eddfd2fdf296d5d576f6d`
+and `0ae0c67345f459fc2990d158f604fba26438d103d2a117937afc41535b0d72e4`.
+The local derived analysis SHA256 is
+`22864f3c9744cc6059e9770827e068333adacbd54572a3bbb70e69c4c896bb9e`.
+
+The next candidate is `A-c16-m085-k2048-eager`, SHA256
+`d364ba2d74495172c9cac77c2476f7e44a0a2139283a1532e263f42ad1c4da5c`.
+It requests2048 prefill tokens per DP rank (CLI chunk32768), retaining TP16,
+DP16,EP1,16 running requests per DP, static fraction0.85 and eager execution.
+The all-extend gathered MoE shape is then expected to be M32768; mixed scheduler
+batches need separate observation. No kernel, quantization or tuning-default
+patch is involved. Fresh full-model functional and fixed-length subset checks
+are still required before any performance conclusion.
+Both nodes started this candidate as cohort `sglang-formal-A-v3` at
+2026-10-23 19:29:58 UTC; READY had not yet been observed at that checkpoint.
