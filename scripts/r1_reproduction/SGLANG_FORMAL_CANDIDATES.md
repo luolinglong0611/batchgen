@@ -6,7 +6,7 @@ the diagnostic launcher/executor and frozen QA/6000-request workload untouched.
 Candidate A now completes fixed-length pilots through2048 requests using a
 smaller prefill chunk and CUDA Graphs. The earlier larger-chunk MoE failure
 and numerical/quality limitations remain recorded below. Candidate B, with
-two independent TP8 replicas, is prepared but has not started. No candidate
+two independent TP8 replicas, started loading at21:03 UTC on2026-10-23. No candidate
 has completed the formal6000-request performance comparison yet.
 
 The identity remains `sglang0.5.5.post3+R1-routing-compat`, using the original
@@ -445,3 +445,30 @@ single-request warmup. It does not establish model accuracy, formal6000
 steady-state performance or a BatchGen speedup. A separate graph-enabled
 known-answer12 functional regression started at20:56:54 UTC; its result is
 pending at this checkpoint.
+
+### Transition to the two-replica B candidate
+
+The known-answer12 regression completed with twelve correct final answers and
+natural stops; details are in [LONGER_CHAT_PROBE.md](LONGER_CHAT_PROBE.md).
+After both performance and diagnostic clients closed, the original A-v5
+supervisors received identity-bound SIGTERM. Their cleanup records reported
+service exit codes-9 and3 respectively, so this is not a claim of normal model
+exit0. The later audit found both original supervisor/service identities
+absent, no remaining recorded sessions or compute applications, and all16
+GPUs at4 MiB/0% utilization. Raw closed service exports are preserved.
+
+Before starting B, isolated TP8-local MoE probes at M1024 and M16384 completed
+with finite BF16 outputs and unchanged FP32 scale hashes. They used the
+original FI0.5.2 entry point, I256/block128, and one owned GPU. Both children
+exited0 and released the card. These synthetic finite checks do not establish
+numerical accuracy, eight-rank behavior or graph replay. Report SHA256 values
+are `d59db80a8284bf6a4cfdeda23b1d2f8cdbe71f898550241abc78d23b6042a1b2`
+and `57e7b5925f221d6f60f7307b9aab597175f277f1fd6910d6e5e48fe9ad5d2413`.
+
+Candidate `B-c128-m085-k2048-graph-bs128`, SHA256
+`717febc6b0df3c751c36b2f5a05422e153504bdd522dc32c4fcb3edb60053788`,
+started as `sglang-formal-B-v1` at21:03:20/24 UTC. Each node is a full TP8/DP8
+service with1024 running requests and16384 prefill tokens configured globally
+within that replica, retaining128 running requests and2048 prefill tokens per
+DP rank. Both use graph maximum128 and the same precision/source settings.
+Readiness, actual capacity and paired512-request results are still pending.

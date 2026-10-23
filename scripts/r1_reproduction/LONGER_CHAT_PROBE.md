@@ -156,3 +156,25 @@ and the guard recorded no remaining service requests. This is a small
 functional check, not a general quality, deterministic-output or performance
 qualification. Earlier numerical-envelope failures and the separate QA64
 failures remain unchanged; this result does not replace them.
+
+## Graph-enabled A-v5 regression
+
+The same twelve native payloads completed on the graph-enabled A-v5 candidate
+at approximately20:57:55 UTC on2026-10-23. All12 returned successful responses,
+nonempty correct final answers under the same six-case rubric, and natural
+stop token1. Completion lengths ranged from194 to1666, below the2048 cap;
+all native output IDs were available and no malformed/nonfinite output-token
+log probabilities were recorded. Final-answer review found no degenerate
+repetition in the answer suffixes; it did not assess every reasoning trace.
+
+Run SHA256 is
+`707005c4cc183d4c699492541cd37e0fd1a1ff1a5b4ddf2be3897045f8d9ee26`;
+final guard SHA256 is
+`9accebacd182ed5d16e40686fe2360346f627047e3cacf1ce0ac1c878076626f`.
+Both original CPU identities were absent after natural exit0 with no cleanup
+signals. All67 raw files were exported, with envelope SHA256
+`424b3b5dbc76460c7635fc97ceefb207f8bfd6182b8f423b24e6088069665cc2`.
+The final-answer review SHA256 is
+`80ce75ea602762cd09e96b050ff3c0ebe24169227b550f03c625155a6cba62d1`.
+This checks a small functional regression with graphs enabled; it does not
+establish general accuracy, all-rank coverage or erase the prior failed gates.
