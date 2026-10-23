@@ -6,7 +6,7 @@ the diagnostic launcher/executor and frozen QA/6000-request workload untouched.
 Candidate A now completes fixed-length pilots through2048 requests using a
 smaller prefill chunk and CUDA Graphs. The earlier larger-chunk MoE failure
 and numerical/quality limitations remain recorded below. Candidate B, with
-two independent TP8 replicas, started loading at21:03 UTC on2026-10-23. No candidate
+two independent TP8 replicas, now completes512-request pilots on both profiles. No candidate
 has completed the formal6000-request performance comparison yet.
 
 The identity remains `sglang0.5.5.post3+R1-routing-compat`, using the original
@@ -515,5 +515,31 @@ higher output throughput. Warmups differ by the number of replicas and are
 excluded; this is not a repeated steady-state result, general-quality pass,
 fully tuned baseline or BatchGen speedup.
 
-The first512 input2048/output8192 pilot started at21:20:49 UTC with the same
-two-replica assignment and two excluded warmups. Its result is pending.
+The first512 input2048/output8192 pilot completed at21:30:38 UTC with the same
+two-replica assignment. Its two excluded warmups took209.404128531 seconds.
+The measured shared-clock batch completion time was375.741604581 seconds,
+with4194304 output tokens and11162.735105358 output tokens/s. All514 original
+warmup/measurement rows passed the same HTTP200, first-attempt, exact-length,
+native usage and source-ID checks; original CPU client/guard exited0 without
+signals and were absent before/after export. Summary SHA256 is
+`67b9d9bdac753dcf8958ce7e4fe4c7a40eb0e54237c5dd5cf08510c407949d63`,
+requests SHA256 is
+`407898581d0c62d07fb91a05595678cfb2f383b283e26978e94d46e1195f21e9`,
+and closed-export SHA256 is
+`2b2b8ce00aabcfa79b6d6f315bcf08cde3edd20dc58b332295e653910542079f`.
+Offline analysis SHA256 is
+`d59fc912b7eb8ac9ea663a6e9b6196410a524fc2bb7d92fbeda86fa8ec88438b`;
+the19-file integrity index is
+`e626d6585b1c2224871c36f7b4b6c79e3b3c5eb8ec8ba9122055892778c9d144`.
+
+| Same512-request prefix | A: one TP16/DP16 service | B: two TP8/DP8 services |
+| --- | ---: | ---: |
+| Input8192/output2048 BCT, seconds |235.561516607|164.280091362|
+| Input2048/output8192 BCT, seconds |472.886555561|375.741604581|
+
+These single-run B observations have43.39% and25.85% higher throughput
+respectively. They support advancing B as a candidate, not a claim of repeated
+steady-state superiority, complete tuning, general quality, or BatchGen speedup.
+The B known-answer regression remains11/12; a separate preregistered48-question,
+two-draw, full-context semantic diagnostic is being prepared. It preserves all
+prior failed gates and cannot retrospectively qualify these performance pilots.
