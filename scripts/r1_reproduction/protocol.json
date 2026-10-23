@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "all_original_R1_weights_converted_native_tensor_registration_validation_pending",
+  "status": "native_tensor_registration_passed_full_model_diagnostic_starting",
   "model": "deepseek-ai/DeepSeek-R1",
   "model_revision": "20f2865710d161dc4a32c4e8c3d7c42c7b9852f8",
   "paper_reference": {
@@ -472,23 +472,37 @@
     "scope": "real worker migration method and QueryBook; excludes full scheduler and model"
   },
   "native_registration_qualification": {
-    "status": "pending_native_tensor_aware_validation",
+    "status": "passed",
     "reservation_gib": 675,
     "whole_region_1_worker": "failed cudaHostRegister memory allocation",
     "whole_region_8_workers": "failed cudaHostRegister memory allocation",
     "driver_chunk_8_workers": "all registrations succeeded; cross-boundary DMA failed cudaErrorInvalidValue",
-    "adaptation": "opt-in16GiB max regions with page-aligned cuts avoiding every tensor; native CPU sanitizer/tests passed; built; awaiting real8worker DMA",
+    "adaptation": "opt-in16GiB max regions with page-aligned cuts avoiding every tensor; native CUDA and CPU sanitizer/tests passed both nodes",
     "prior_reports": [
       "weight-registration-v1.json",
       "weight-registration-single-v2.json",
       "weight-registration-chunked-v3.json",
       "weight-registration-chunked8-v4.json"
-    ]
+    ],
+    "nodes": [
+      "node0",
+      "node1"
+    ],
+    "report": "weight-registration-native-v5.json",
+    "workers_per_node": 8,
+    "tensors_per_worker": 270,
+    "regions_per_worker": 43,
+    "real_tensor_crosses_nominal_16GiB_boundary": true,
+    "comparison": "every tensor source/host/GPU roundtrip exact bytes and SHA256",
+    "clean_native_release": true,
+    "core_engine_sha256": "f0f0e5af58fb7c6f404e1e390b626556c5355497179b18af133bc729ed8a6a29",
+    "scope": "675GiB mapping with one shifted verified shard and zero padding; not full-model loading"
   },
   "full_model_reproduction": {
     "weights_loaded": false,
     "forward_executed": false,
     "performance_benchmark_executed": false,
-    "speedup_established": false
+    "speedup_established": false,
+    "status": "starting diagnostic; all 163 converted shards will be rehashed before launch"
   }
 }
