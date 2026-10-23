@@ -105,3 +105,27 @@ The guard launches only the CPU client and can signal only its new process group
 it neither queries GPUs nor starts/stops the model service. An interrupted client
 can leave HTTP requests running, which is reported for the resource owner to check.
 Successful collection is scored with the frozen definitions and remains descriptive.
+
+2026-10-23 SGLang v4 collection completed in `ROOT/qa-sglang-64-v1` under the
+recorded `sglang0.5.5.post3+R1-routing-compat` deployment. All 64 HTTP responses
+passed transport/usage validation; 59 reported `stop`, 5 reported `length`, with
+23,086 output tokens total. **16 responses contained one output token and empty
+decoded text**; transport success must not be described as 64 answered questions.
+The cause of these empty completions is not established by this response data.
+
+| Descriptive metric | Result |
+|---|---:|
+| A complete raw text EM / token-F1 | 0 / 0.1030309484 |
+| B observable suffix EM / token-F1 lower bound | 0.078125 / 0.2331822953 |
+| B suffix coverage | 36/64 |
+
+Prepared manifest SHA256: `eb12105962cc77dd1f4ffe8423da91d0ba3e97b98c8af7e41236ceeca2351bb4`.
+Response JSONL SHA256: `9d130296868b7bae94d727d616be22238b82c48565e88a27c62e2b0fc47baed4`.
+Score SHA256: `498f956b8f3170633dabb39c9a75d620257dc3b4a1d99c8439044f0e13380106`.
+The client guardian exited zero with no remaining session members or signals.
+The exact artifacts were also fetched locally and verified. Python 3.13's default
+floating-point aggregation differs from the original Python 3.11 aggregate by
+about 1e-17; explicit left-fold addition reproduces the original score bytes.
+No source score, metric or original report was changed. These raw, clipped prompts
+and incomplete answer observability cannot establish model quality or statistical
+equivalence. The paired BatchGen collection and formal performance campaign remain pending.
