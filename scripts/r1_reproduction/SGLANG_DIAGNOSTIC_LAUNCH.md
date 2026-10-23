@@ -95,3 +95,39 @@ MLA KV 数据，另有页表/工作空间。`--mem-fraction-static 0.85` 仍保�
   `flashinfer/data/csrc/trtllm_fused_moe_kernel_launcher.cu:624–660`：路由MoE的FP32 scales。
 
 所有启动条件仍须以实际日志和独立GPU记录确认。原有BatchGen严格数值失败记录保持不变。
+
+## TRTLLM primitive 小测试（准备完毕，尚未运行）
+
+`sglang_trtllm_diagnostic.py` 分 `--stage mla` 和 `--stage moe`，一次只测试一个阶段、
+一张获分配且空闲的 GPU。不要在 BatchGen 正在运行时执行。外部 supervisor 必须限制
+900秒、CPU RSS 8GiB、该进程GPU用量4GiB、MemAvailable至少64GiB，超限只终止自己的
+进程组。脚本内部的3GiB PyTorch allocator上限不能限制CUDA上下文及全部第三方分配，
+所以不能替代外部 `nvidia-smi` 监控。可沿用已验证dense-smoke guard，调整这些限额和路径。
+
+获得父任务释放通知后，在 baseline 环境、同一私有 C++ runtime、三个 dense policy env=0、
+未设置 ptxas override/`DISABLE_MMA_V5` 的前提下，交由 supervisor 执行：
+
+```bash
+/home/admin/batchgen-r1-repro-20261023/sglang-baseline-v8/baseline-env/bin/python \
+  scripts/r1_reproduction/sglang_trtllm_diagnostic.py \
+  --stage mla --expected-hostname serverless-010066009163.wm226 \
+  --output /home/admin/batchgen-r1-repro-20261023/sglang-baseline-v8/trtllm-mla-v1
+```
+
+另一阶段改 `--stage moe` 和独立的新输出目录；node1使用其真实hostname。
+脚本核对原始config SHA、固定版本及自带ptxas12.9，要求只暴露一张SM103 GPU。
+
+- MLA：真实128heads/QK192/V128、不等长[1,63,65]causal prefill；decode使用
+  Q[3,1,128,576]、KV[10,1,64,576]、打乱物理页及两种padding（0、有限16），
+  128MiB workspace，独立CPU FP32参考。保留原有严格1e-5+0.016相对误差、失败比例<1e-4门槛；
+  失败退出2，不能记为通过。未测试NaNpadding，不覆盖此前0.6.13的失败记录。
+- MoE：真实TP16/EP1分片的E256/H7168/I128/top8，W13[256,256,7168]、
+  W2[256,7168,128]共672MiB FP8权重；一般FP32 block128 scales测试前后逐位不变。
+  采用实际DeepSeekV3路由类型2、BF16 correction bias、scale2.5、M2；另验证零输入输出精确为0。
+  参考是反量化输入/权重的FP32计算，**不包含**TRTLLM中间FP8重新量化和BF16路由权重舍入，
+  因此只记录误差，没有临时设定质量阈值。它也不执行TP allreduce或shared MLP。
+
+三种实际FlashInfer0.5.2函数的参数已用已安装源码的函数签名做CPU静态检查；
+native C++允许I128，但是否存在兼容的预编译tactic仍需实机确认。
+编译、cubin获取、无可用tactic、dtype/shape或nonfinite错误都将保留traceback并退出非零，
+不改I维度、不切换后端、不自动放宽门槛重试。
