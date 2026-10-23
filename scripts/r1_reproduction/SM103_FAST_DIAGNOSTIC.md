@@ -187,3 +187,26 @@ At the saved22:07:57 UTC observation, the excluded warmup remained active
 with no guard violation. There is no completed BG BCT/throughput result from
 this pilot at that observation. Single-request decode log rates do not
 establish32/512/6000-request throughput or paper speedup.
+
+The same pilot subsequently completed, and its original CPU client and guardian
+were independently observed absent at2026-10-23 22:20:48 UTC. All32 measured
+responses passed the unchanged structural and exact-length checks:262,144
+input tokens,65,536 output tokens,32 length finishes, no missing IDs and no
+empty decoded text. Upload through complete result-file retrieval took
+**527.178497202 seconds**, giving **124.314630335 output tokens/s**. The
+separate one-request warmup took470.056206057 seconds and is excluded. There
+was one upload/create per phase and no retry; polling and result download are
+included in the primary time. These checks do not establish semantic accuracy.
+
+The closed export preserves28 original files (4,578,943 bytes). The original
+client validation was reproduced offline, and both original CPU identities
+were absent before and after export. Final guard and summary SHA256 are
+`a05206e516322fa203ac0ace40650c3eed717913572c4b464b7df9e300dd918e` /
+`4002b167f2374123ba4d6e4d47ac523511c65934a0d0e76eb92d3f4042bd525c`.
+Independent analysis SHA256 is
+`ed94e3f35dd4502e447c03cb7d8f30ce18141ef402562d5f3e49e6f2b550b40f`;
+the local freeze index is
+`9efb70c22b083150517a0608c6cf9d50f5aa780c0f7dd9a17da9dae28d58fcae`.
+Subsequent22:21:28 UTC observations found both services healthy with no active
+batch, intake or scheduled requests. This is a completed small diagnostic
+pilot, not a formal6000-request result or a successful speedup reproduction.
