@@ -3,9 +3,10 @@
 `plan_sglang_formal_candidate.py` creates local JSON plans only. It never starts
 services, contacts the containers, queries GPUs or sends requests. It leaves
 the diagnostic launcher/executor and frozen QA/6000-request workload untouched.
-Candidate A has started and completed a twelve-request functional diagnostic;
-fixed-length subset tuning is in progress. No candidate is admitted for the
-formal 6000-request performance comparison yet.
+Candidate A completed a twelve-request functional diagnostic. Its first
+32-request fixed-length attempt failed during MoE prefill, and both services
+have been stopped. Kernel-boundary investigation is in progress; no candidate
+is admitted for the formal 6000-request performance comparison yet.
 
 The identity remains `sglang0.5.5.post3+R1-routing-compat`, using the original
 R1 FP8 weights and F32 block scales. The R1 routing compatibility patch and the
@@ -211,3 +212,34 @@ All16 ranks warn that eight dense FP8 shapes lack tuned `NVIDIA_L20D` config
 files and use defaults. Preserve this limitation when interpreting tuning
 results; initialization does not establish an optimized baseline. The12-request
 functional result is recorded in [LONGER_CHAT_PROBE.md](LONGER_CHAT_PROBE.md).
+
+### First fixed-length subset failed at the MoE launch
+
+The8192-input/2048-output protocol completed one warmup request: HTTP200,
+exact8192/2048 usage, finish reason `length`. Its247.777878 seconds are warmup,
+not benchmark BCT. At03:09:19 CST, the following32-request burst reached
+4096-token per-DP prefill and raised `cudaLaunchKernelEx: invalid argument`
+in FlashInfer's `trtllm_fused_moe_dev_kernel.cu:178`. The client was stopped;
+`requests.jsonl` and `summary.json` were absent. The client writes measurement
+rows after all requests return, so absence does not mean no requests were sent.
+No measured batch throughput, latency, or speedup is available for this attempt.
+
+The exact installed source SHA256 is
+`63c9801e6930db1a394ef9d99729e6084fcad31b8164ec5b0d8baf4e63ec2a15`.
+Its FP8 activation launcher sets `grid.z = data.numTokens` at line176, while
+[CUDA limits the grid y/z dimensions to65535](https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/compute-capabilities.html).
+Source analysis predicts that16 DP prefill chunks of4096 can gather65536
+tokens for the MoE call. The failing service did not directly trace that
+call's token count; this is a supported boundary hypothesis awaiting an
+isolated kernel reproduction, not a recorded runtime shape. The activation
+kernel already contains a grid-stride token loop, but no patch is applied yet.
+
+Both original services and the client were independently checked absent;
+all16 GPUs returned to4MiB/0% with no visible compute processes. Node1 exited3
+and its supervisor completed cleanup; node0 required the existing supervisor's
+SIGKILL after its120-second SIGTERM grace. Original failed guard metadata,
+including `server_requests_may_remain=true` at client shutdown, is preserved
+separately from the later model-service cleanup evidence. Closed-export import
+receipt SHA256 values are
+`441fd2fd925fd1dd2dba91c87d48885844d9c3f6053d3ea7ffceb8fec645a28a`
+and `5521c7be5805475b291fe546b025abb88820f41db297128fcda728d601a6dcae`.
