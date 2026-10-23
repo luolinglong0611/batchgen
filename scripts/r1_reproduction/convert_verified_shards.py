@@ -37,6 +37,7 @@ from collections import defaultdict
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import fcntl
+import errno
 import hashlib
 import importlib.util
 import json
@@ -127,6 +128,19 @@ def validate_manifest(path: Path):
 
 
 def download_ready(source: Path, entry: dict):
+    try:
+        return _download_ready(source, entry)
+    except OSError as error:
+        # OSS FUSE may expose a receipt before it is readable. The outer polling
+        # loop already has a deadline; treat only transient filesystem errors as
+        # pending. Manifest/hash mismatches and permission errors stay fatal.
+        if error.errno not in (errno.ENOENT, errno.EIO, errno.ESTALE):
+            raise
+        event("download_receipt_temporarily_unreadable", file=entry["Path"], errno=error.errno)
+        return False
+
+
+def _download_ready(source: Path, entry: dict):
     path = source / entry["Path"]
     receipt_path = source / (entry["Path"] + ".verified.json")
     if not path.exists() or not receipt_path.exists():
