@@ -1,4 +1,4 @@
-# SGLang R1 双机诊断计划（尚未启动模型）
+# SGLang R1 双机诊断计划与运行记录
 
 本计划对应已安装的 `sglang-baseline-v8/baseline-env`，不是重新安装环境。
 每节点 8 卡，TP16 / DP-attention16 / EP1，共 16 卡。模型和 tokenizer 均直接读取
@@ -96,7 +96,7 @@ MLA KV 数据，另有页表/工作空间。`--mem-fraction-static 0.85` 仍保�
 
 所有启动条件仍须以实际日志和独立GPU记录确认。原有BatchGen严格数值失败记录保持不变。
 
-## TRTLLM primitive 小测试（准备完毕，尚未运行）
+## TRTLLM primitive 小测试协议
 
 `sglang_trtllm_diagnostic.py` 分 `--stage mla` 和 `--stage moe`，一次只测试一个阶段、
 一张获分配且空闲的 GPU。不要在 BatchGen 正在运行时执行。外部 supervisor 必须限制
@@ -145,3 +145,27 @@ baseline wheel, with target SHA and header ownership in `provenance.json`.
 Explicit `LIBRARY_PATH` uses this directory; `LD_LIBRARY_PATH` includes the
 baseline cu13 lib directory after the private C++ runtime. Node1 primitive v2
 retains the prior missing `-lcudart` linker failure. No system/toolkit files change.
+
+## 2026-10-23 实机记录
+
+两节点 dense smoke 可执行；MLA v3 使用上述真实维度，有限输出且两机指标一致，
+但旧严格门槛均失败，保留失败标签。MoE v3 的 CPU 参考误把原生 `up,gate` 当作
+`gate,up`，该轮误差比较无效且原文件保留。自有测试修正后的 v4 在两机一致：
+随机输入输出有限、FP32 scales 逐位不变，相对不含中间 FP8 量化的 FP32 参考
+L2 为 0.04504316；没有据此增加通过门槛。
+
+两种零输入（原正 activation scale；官方 quantizer 的 scale 约2.23214296e-13）
+均产生非有限输出。安装版本 activation kernel 的 `amax/448` 无零值保护，
+全零 intermediate 随后 `0/0`。未修改第三方；零输入不变量失败保持失败。
+完整 SGLang loader 同时交换 w1/w3 和 block scales，实际布局符合原生 up,gate。
+
+19:28（北京时间），两节点全部测试会话和 GPU 释放；随后 CPU/权重 receipt/空闲 GPU
+检查完成，19:32:45 双机服务进程启动，运行目录 `sglang-diagnostic-v1-node0/1`。
+**本次是带明确失败记录的完整模型诊断，不是算子资格通过后的正式质量/性能实验。**
+每个目录的 `diagnostic-scope-admission.json` 记录此目的、既有失败、释放证据和资源保护。
+截至这次记录仅确认服务正在启动，尚无就绪或生成结果；实际状态见 `status.json`、
+`ready.json`、`service.log`。任何一节点失败，父任务停止另一节点。
+
+固定客户端复用 12 条生成请求，另有 6 条独立 teacher-forced 参考请求。
+后者只提供 SGLang 参考 NLL，不能与 BatchGen 缺失的 logits/NLL 比较，
+也不能把这 18 次 HTTP 的整体耗时用作两引擎 BCT 对比。
