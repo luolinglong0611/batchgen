@@ -230,3 +230,26 @@ difference. Neither result is a repeated, saturated or isolated-kernel
 measurement; the graph settings differ and quality remains unqualified.
 Independent comparison receipt SHA256:
 `5f3f168503b1bff0f781684db595d439842213dad46bba728d38881fcf2a4d75`.
+
+
+The next v4 pilot used the unchanged first512 input8192/output2048 payload,
+traceOFF and one separate warmup. The warmup completed with one valid response
+in427.968786670 seconds. The measured batch then failed during packed prefill:
+**0 of512 responses were returned**. Its28.526232560-second observation interval
+ends in a failed batch, so it is neither a completed BCT nor a throughput result.
+The API preserved an AcceleratorError from global rank10, observed at
+`wrappers.py`'s `cu_seqlens[seq_idx].item()` after the SM103 prefill backend
+returned. CUDA asynchronous error reporting means this observation does not
+identify the faulting kernel or establish offload as the cause.
+
+The original CPU client and guard were independently observed absent at
+2026-10-23 22:32:25 UTC. Their25-file export preserves21,304,855 original bytes;
+the import receipt explicitly retains `server_requests_may_remain=true`.
+Final guard and summary SHA256 are
+`a24a757559fcf661cf3f846de27bdfe44b961edbfdb2ef4432cb85135faa00c1` /
+`16a3bd580127c81cfe0515005ba5ef858a8dad2f82d3d38d546f1a201b4c5632`.
+Failed-export import receipt SHA256:
+`c25aa6d13be20e6eedf5ab1fed4a6b94f54267a2bfa7c779278a480701b8933e`.
+No successful-prefix analyzer was applied to this failed run. The512-request
+input2048/output8192 pilot remains unexecuted and was deferred for fault
+localization; it must not be recorded as completed or closed.
