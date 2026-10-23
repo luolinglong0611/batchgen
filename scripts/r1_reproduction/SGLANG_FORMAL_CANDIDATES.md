@@ -492,6 +492,28 @@ The B known-answer12 run closed with eleven correct final answers and natural
 stops, but the second replica's Chinese ratio case reached2048 tokens while
 still thinking. This is a failed12/12 functional regression, preserved in
 [LONGER_CHAT_PROBE.md](LONGER_CHAT_PROBE.md), not evidence of general quality.
-The unchanged512-request input8192/output2048 performance pilot started at
-21:15:29 UTC with one excluded warmup per endpoint and256 measured requests
-per replica. Its performance result is pending; quality remains unqualified.
+The unchanged512-request input8192/output2048 performance pilot completed at
+21:19:19 UTC. One excluded warmup per endpoint took53.926501393 seconds
+globally. The512 measured requests,256 per replica, took164.280091362 seconds
+from the first attempt until the last complete response body, giving
+6382.854984475 output tokens/s. All514 warmup/measurement rows passed exact
+usage, HTTP200/one-attempt, length-finish and original-payload checks. The
+original CPU client/guard exited0 without cleanup signals and were absent
+before and after export.
+
+Summary SHA256 is
+`95fd0cc1f74e71a244d854c9a2f9145896fef45ea2a322f45746487167f487d6`;
+requests SHA256 is
+`36d5149d2e10d542d9098e1ca84f27d4a09c3be3747dcef43a575fd52244f676`;
+closed export SHA256 is
+`4e45b0b44d96b568fea5fdea9d0e42d60653a756832c671954a75274aa39ced0`.
+The offline analysis and nineteen-file integrity index have SHA256 values
+`72ac0f8767f0fcc5d2aa764f16f8ae376f4d21b43e2d87b2676e24950dfba39a`
+and `04512da4c0ac783e53550a1be1c90ab121cb69cb0a337fcb4e0fab3204b1ae11`.
+Compared with A-v5's same512 prefix, this one B observation has about43%
+higher output throughput. Warmups differ by the number of replicas and are
+excluded; this is not a repeated steady-state result, general-quality pass,
+fully tuned baseline or BatchGen speedup.
+
+The first512 input2048/output8192 pilot started at21:20:49 UTC with the same
+two-replica assignment and two excluded warmups. Its result is pending.
