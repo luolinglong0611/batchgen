@@ -2935,6 +2935,23 @@ class BatchGenWorker:
 				seq = self.global_batch.get_sequence(uuid)
 				if seq is not None and local_idx in self.query_book:
 					decoded_tokens = self._trajectory_decoded_tokens(seq)
+					# Opt-in CPU diagnostics before completion releases the trajectory.
+					# The disabled path does not read/materialize any additional tokens.
+					if (getattr(self, "model_name", None) == "deepseek-ai/DeepSeek-R1"
+							and os.environ.get("BATCHGEN_R1_NATIVE_TOKEN_TRACE") == "1"
+							and seq.assigned_rank == self.rank):
+						try:
+							from batchgen.worker.r1_native_token_trace import build_native_token_record
+							prompt_tokens = self._trajectory_tokens(seq, length=seq.original_prompt_length)
+							record = build_native_token_record(
+								seq, rank=self.rank, model_context_length=self.model_context_length,
+								prompt_tokens=prompt_tokens, generated_tokens=decoded_tokens,
+							)
+							logging.info("[R1_NATIVE_TOKENS] %s", json.dumps(record, separators=(",", ":")))
+						except Exception as exc:
+							# A diagnostic failure must not strand peers in the collective.
+							logging.warning("[R1_NATIVE_TOKENS_ERROR] rank=%s uuid=%s error=%s",
+								self.rank, uuid, type(exc).__name__)
 					try:
 						text = self._decode_tokens_to_string(decoded_tokens)
 					except Exception:
