@@ -40,6 +40,23 @@ def verify_persistent(path, expected, timeout=300):
             time.sleep(5)
 
 
+def retry_io(operation, timeout=300):
+    """Retry transient object-mount I/O without discarding local verified data."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            return operation()
+        except OSError as exc:
+            if exc.errno not in (2, 5, 11, 16, 110, 116) or time.monotonic() >= deadline:
+                raise
+            time.sleep(5)
+
+
+def verify_receipt(path, expected_text):
+    if path.read_text() != expected_text:
+        raise OSError(5, 'Receipt not yet visible: ' + path.name)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--manifest', type=Path, required=True)
@@ -106,16 +123,27 @@ def main():
         # Recover an interrupted publication without copying several GB again.
         # The local verified source stays intact until the final object is verified.
         if not publishing.exists() or publishing.stat().st_size != f['Size']:
-            shutil.copyfile(tmp, publishing)
+            retry_io(lambda: shutil.copyfile(tmp, publishing))
         verify_persistent(publishing, f)
-        os.replace(publishing, dest)
+        retry_io(lambda: os.replace(publishing, dest))
         verify_persistent(dest, f)
-        receipt.write_text(json.dumps({'sha256': f['Sha256'], 'size': f['Size'], 'revision': f['Revision']}))
+        receipt_text = json.dumps({'sha256': f['Sha256'], 'size': f['Size'], 'revision': f['Revision']})
+        retry_io(lambda: receipt.write_text(receipt_text))
+        retry_io(lambda: verify_receipt(receipt, receipt_text))
         tmp.unlink()
         print(json.dumps({'event': 'verified', 'file': name, 'bytes': f['Size'], 'seconds': round(time.monotonic()-start, 2)}), flush=True)
 
+    failures = []
     with concurrent.futures.ThreadPoolExecutor(args.workers) as pool:
-        list(pool.map(fetch, files))
+        pending = {pool.submit(fetch, f): f['Path'] for f in files}
+        for future in concurrent.futures.as_completed(pending):
+            try:
+                future.result()
+            except Exception as exc:
+                failures.append(pending[future])
+                print(json.dumps({'event': 'failed', 'file': pending[future], 'error': str(exc)}), flush=True)
+    if failures:
+        raise RuntimeError('Files failed; verified local staging preserved: ' + ', '.join(failures))
     print(json.dumps({'event': 'complete', 'files': len(files)}), flush=True)
 
 

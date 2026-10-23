@@ -1,0 +1,17 @@
+# SGLang paper release. PyPI wheel digest verified against official release metadata.
+sglang @ https://files.pythonhosted.org/packages/f0/24/cc0dc34e66002034ae1b9dd7af14352672b9b131965b248cd83bc87fb76a/sglang-0.5.5.post3-py3-none-any.whl#sha256=0283d290a480e56201cab6e42bc5cf5f505f600a9508d004c06283b052f60203
+torchvision==0.24.0+cu130
+flashinfer-python==0.5.2
+flashinfer-cubin==0.5.2
+transformers==4.57.1
+triton==3.5.0
+# Installation/audit tools and the pinned Triton source's build requirements.
+pip==25.3
+setuptools==80.9.0
+wheel==0.45.1
+packaging==25.0
+build==1.3.0
+cmake>=3.20,<4.0
+ninja>=1.11.1
+pybind11>=2.13.1
+lit
