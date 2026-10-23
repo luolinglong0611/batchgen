@@ -32,6 +32,8 @@ def main():
     ap.add_argument('--workers', type=int, default=4)
     ap.add_argument('--limit', type=int)
     ap.add_argument('--exclude-file', action='append', default=[])
+    ap.add_argument('--weight-start', type=int, default=0)
+    ap.add_argument('--weight-end', type=int)
     args = ap.parse_args()
     if not Path('/.dockerenv').exists():
         ap.error('Run inside the allocated container')
@@ -47,7 +49,11 @@ def main():
         ap.error('workers must be 1..8')
     # Metadata first; then weights. Bound local scratch space to concurrent files.
     files.sort(key=lambda f: (f['Path'].endswith('.safetensors'), f['Path']))
-    files = [f for f in files if f['Path'] not in args.exclude_file]
+    weights = [f for f in files if f['Path'].endswith('.safetensors')]
+    if args.weight_start < 0 or (args.weight_end is not None and args.weight_end < args.weight_start):
+        ap.error('Invalid weight slice')
+    selected = {f['Path'] for f in weights[args.weight_start:args.weight_end]}
+    files = [f for f in files if (not f['Path'].endswith('.safetensors') or f['Path'] in selected) and f['Path'] not in args.exclude_file]
     if args.limit:
         files = files[:args.limit]
     args.destination.mkdir(parents=True, exist_ok=True)
@@ -56,7 +62,11 @@ def main():
     if shutil.disk_usage(args.staging).free < needed:
         ap.error('Insufficient local staging capacity')
     manifest_copy = args.destination / 'download-manifest.json'
-    manifest_copy.write_text(args.manifest.read_text())
+    if manifest_copy.exists():
+        if manifest_copy.read_text() != args.manifest.read_text():
+            ap.error('Persistent manifest differs; use a new destination')
+    else:
+        manifest_copy.write_text(args.manifest.read_text())
 
     def fetch(f):
         name = f['Path']
@@ -70,7 +80,10 @@ def main():
         tmp = args.staging / (name + '.partial')
         url = 'https://modelscope.cn/api/v1/models/deepseek-ai/DeepSeek-R1/repo?' + urlencode({'Revision': f['Revision'], 'FilePath': name})
         start = time.monotonic()
-        subprocess.run(['curl', '-fL', '--silent', '--show-error', '--connect-timeout', '15', '--max-time', '7200', '--retry', '3', '--retry-delay', '3', '--output', str(tmp), url], check=True, timeout=29000)
+        if tmp.exists() and tmp.stat().st_size > f['Size']:
+            raise RuntimeError('Staging file exceeds expected size: ' + name)
+        if not tmp.exists() or tmp.stat().st_size < f['Size']:
+            subprocess.run(['curl', '--continue-at', '-', '-fL', '--silent', '--show-error', '--connect-timeout', '15', '--max-time', '7200', '--retry', '3', '--retry-delay', '3', '--output', str(tmp), url], check=True, timeout=29000)
         if tmp.stat().st_size != f['Size'] or digest(tmp) != f['Sha256']:
             raise RuntimeError('Downloaded file failed verification: ' + name)
         publishing = args.destination / (name + '.publishing')
