@@ -334,3 +334,39 @@ actual capture memory and replay must still be verified. Only the new tooling
 was transferred while v3 ran. Both original v3 supervisors were subsequently
 sent identity-bound SIGTERM after the 128 client had closed, to release the
 nodes for this separate candidate.
+
+### Graph candidate: first 32-request pilot
+
+The same graph candidate, SHA256
+`143d658784dd2306432818df9835811d747291f568c036095f6552b234e5f448`,
+started as `sglang-formal-A-v5` on both nodes at 20:06:31–32 UTC.
+The preceding v4 preparation was abandoned after node0's port check failed;
+neither v4 node launched a model. Fresh paired v5 preparation receipts were
+used. All 16 ranks subsequently logged successful graph capture, approximately
+23 seconds and 2.58 GiB per rank, with 36.46 GiB free afterward. The actual
+server-info response reports graph maximum128, 2048 global running requests,
+TP16/DP16 and 2048 effective prefill tokens per DP rank. Its 16 memory entries
+report 172.97 GiB KV and 2642944 tokens each; list order is not a rank map.
+Separate decode logs from both nodes show `cuda graph: True` on every rank
+during the following pilot. This observes capture and replay, not model accuracy.
+
+The original first32 requests, unchanged from the eager pilot, completed at
+20:14:42 UTC with all32 HTTP200 responses, one attempt each, exact8192 input
+and2048 output tokens, and length termination. BCT was90.197194855 seconds,
+or726.5857891186 output tokens/s. The67.89535177-second warmup is excluded.
+The client and guard naturally closed with exit0, no cleanup signals and no
+remaining requests. All9 raw evidence files were exported and hash-verified;
+both original process identities were absent before and after export.
+Raw summary SHA256:
+`f2f7bb290b5bac1ed1b84fb2a3e0724b2189b13ba71f3dae86cf56fbd588e2da`.
+Raw requests SHA256:
+`8bc4d68c2f592de6357a8a0792d9e381e5cd63e59d36d54ac8fcc13580cb83e4`.
+Closed export SHA256:
+`727e7edc56310ca2714ac55f1ef06344a15bb33ca6c5228087fb7463c9262ed2`.
+
+This small c128/graph pilot is separate from the c16/eager configuration, so
+the difference from281.105371542 seconds is not a graph-only ablation. Default,
+untuned dense FP8 configurations remain in use. There is still no formal6000
+result, optimized-baseline claim, quality pass or BatchGen speedup measurement.
+A first128 burst began at20:16:02 UTC after fresh two-node readiness records
+and closure of the32-request client; its result was pending at this checkpoint.
