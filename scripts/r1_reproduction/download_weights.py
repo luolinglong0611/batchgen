@@ -24,6 +24,22 @@ def digest(path):
     return h.hexdigest()
 
 
+def verify_persistent(path, expected, timeout=300):
+    """Object-backed mounts can acknowledge close before reads see the object."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            if path.stat().st_size != expected['Size']:
+                raise OSError('Persistent size mismatch: ' + path.name)
+            if digest(path) != expected['Sha256']:
+                raise OSError('Persistent hash mismatch: ' + path.name)
+            return
+        except OSError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(5)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--manifest', type=Path, required=True)
@@ -87,18 +103,13 @@ def main():
         if tmp.stat().st_size != f['Size'] or digest(tmp) != f['Sha256']:
             raise RuntimeError('Downloaded file failed verification: ' + name)
         publishing = args.destination / (name + '.publishing')
-        shutil.copyfile(tmp, publishing)
-        # Read back through FUSE; transient propagation failures are retried.
-        for attempt in range(5):
-            try:
-                if publishing.stat().st_size != f['Size'] or digest(publishing) != f['Sha256']:
-                    raise OSError('Persistent copy hash mismatch')
-                break
-            except OSError:
-                if attempt == 4:
-                    raise
-                time.sleep(2)
+        # Recover an interrupted publication without copying several GB again.
+        # The local verified source stays intact until the final object is verified.
+        if not publishing.exists() or publishing.stat().st_size != f['Size']:
+            shutil.copyfile(tmp, publishing)
+        verify_persistent(publishing, f)
         os.replace(publishing, dest)
+        verify_persistent(dest, f)
         receipt.write_text(json.dumps({'sha256': f['Sha256'], 'size': f['Size'], 'revision': f['Revision']}))
         tmp.unlink()
         print(json.dumps({'event': 'verified', 'file': name, 'bytes': f['Size'], 'seconds': round(time.monotonic()-start, 2)}), flush=True)

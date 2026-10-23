@@ -143,7 +143,12 @@ class DeepSeek_Parameter_Server:
             "DeepseekV3ForCausalLM",
             "DeepseekV4ForCausalLM",
         }:
-            model = DeepseekV3ForCausalLM._from_config(self.hf_config).to('cpu')
+            # This model only supplies parameter names below. Materializing its
+            # 671B floating-point parameters can exhaust RAM before the FP8
+            # shared-memory store is even allocated. Never move this metadata
+            # model to CPU: no values from it are used for inference.
+            with torch.device("meta"):
+                model = DeepseekV3ForCausalLM._from_config(self.hf_config)
         else:
             raise ValueError("Unknown model architecture")
         model.eval()
