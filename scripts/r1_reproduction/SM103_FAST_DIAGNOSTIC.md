@@ -28,6 +28,13 @@ CUDA 13 and native-library checks. There is no implicit backend fallback. This
 option changes only attention selection; topology, host KV capacity and the
 normal server command remain the same.
 
+The diagnostic launcher supervises its directly owned HTTP child with WNOWAIT.
+A stop request first signals that leader so normal worker and native-memory
+release can run for 300 seconds. Any necessary escalation targets only the
+primary process group while its original leader is still unreaped. Other
+groups are audited and explicitly require operator cleanup if still live.
+The structured audit is saved before reaping; no numeric signal follows reap.
+
 Use an independently reviewed clean BatchGen environment when launching: the
 launcher retains inherited variables outside its explicit environment overrides.
 Keep skeleton mmap off for the first full-model probe, record native completion

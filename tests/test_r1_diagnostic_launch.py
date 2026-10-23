@@ -57,6 +57,16 @@ class DiagnosticLaunchTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             launch.plan(launch.ROOT, 0, 'contract-v1', 'unreviewed_backend')
 
+    def test_server_wait_is_delegated_to_owned_unreaped_process_supervisor(self):
+        tree = ast.parse((ROOT / 'scripts/r1_reproduction/launch_r1_diagnostic.py').read_text())
+        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+        self.assertTrue(any(isinstance(node.func, ast.Name) and node.func.id == 'supervise_child'
+                            for node in calls))
+        self.assertFalse(any(isinstance(node.func, ast.Attribute)
+                             and isinstance(node.func.value, ast.Name)
+                             and node.func.value.id == 'child' and node.func.attr in ('wait', 'poll')
+                             for node in calls))
+
 
 class RegistrationEvidenceGateTest(unittest.TestCase):
     """Ephemeral fake files test validation only; never valid GPU evidence."""

@@ -14,7 +14,6 @@ import os
 from pathlib import Path
 import re
 import shlex
-import signal
 import socket
 import stat
 import subprocess
@@ -402,6 +401,9 @@ def main():
         state['git_commit'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=args.root / 'repo', text=True).strip()
         state['source_sha256'] = {str(p.relative_to(args.root / 'repo')): digest(p)
                                   for p in (args.root / 'repo/batchgen').rglob('*.py')}
+        state['launcher_source_sha256'] = {
+            name: digest(args.root / 'repo/scripts/r1_reproduction' / name)
+            for name in ('launch_r1_diagnostic.py', 'r1_launch_process.py')}
         state['network_environment'] = {k: v for k, v in os.environ.items() if k.startswith(('UCX_', 'NCCL_'))}
         state['status'] = 'launching'
         report.write_text(json.dumps(state, indent=2) + '\n')
@@ -415,20 +417,23 @@ def main():
         # tokenizer checks; no fabricated capability, fallback, or preflight skip.
         child = subprocess.Popen(command, cwd=args.root / 'repo', env=child_env,
                                  start_new_session=True)
-        def stop_owned_group(signum, _frame):
-            try:
-                os.killpg(child.pid, signum)
-            except ProcessLookupError:
-                pass
-            try:
-                child.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                os.killpg(child.pid, signal.SIGKILL)
-                child.wait()
-            raise SystemExit(128 + signum)
-        signal.signal(signal.SIGTERM, stop_owned_group)
-        signal.signal(signal.SIGINT, stop_owned_group)
-        code = child.wait()
+        from r1_launch_process import supervise_child
+
+        def save_supervision(audit):
+            state['process_supervision'] = audit
+            temporary = report.with_suffix('.tmp')
+            temporary.write_text(json.dumps(state, indent=2) + '\n')
+            temporary.replace(report)
+
+        # Sole direct-child wait ownership retains the HTTP leader with
+        # WNOWAIT through ordered native release and the final group audit.
+        audit = supervise_child(child, on_update=save_supervision)
+        state['process_supervision'] = audit
+        if audit['parent_cleanup_required'] or 'supervision_error' in audit:
+            state.update(status='failed', exit_code=2,
+                         error='Process supervision failed; inspect the preserved ownership/cleanup audit')
+            return 2
+        code = audit['exit_code']
         state['status'], state['exit_code'] = 'exited', code
         return code
     except BaseException as exc:
