@@ -1,5 +1,5 @@
 {
-  "scope": "Selected installed source files read from node1 baseline-v8; not a full installed-tree or upstream Git SHA verification",
+  "scope": "Selected installed source files from baseline-v8 with audited R1-only routing compatibility patch; not stock SGLang, a full installed-tree or upstream Git SHA verification",
   "sglang_version": "0.5.5.post3",
   "observed_hostname": "serverless-010066009166.wm226",
   "files": {
@@ -8,7 +8,7 @@
     "sglang/srt/model_loader/weight_utils.py": "a39294d2ebce5031873b577550df38e6b986a045873be63579146fe064e1f2a4",
     "sglang/srt/model_loader/utils.py": "b786811fefd9884882923c8052cef54afdf9f3d0e5928a871faf546a35c07c6f",
     "sglang/srt/model_executor/model_runner.py": "c16d0d2b133e0e1efd7d338034a7908e662bbadab1dcef418418c08c28910c45",
-    "sglang/srt/models/deepseek_v2.py": "620cd09545404fd62952e2239b905cfb26bc7565b361ac76bdf8f6d89ca80f49",
+    "sglang/srt/models/deepseek_v2.py": "6fa332b6aad5017d336c50826ecac5e1aa8ff446821c5a860ba83f930234f835",
     "sglang/srt/layers/quantization/fp8.py": "31faac58174b3ee8298504c140e00647f502db2205b7c0e6156a8c0a407595d2",
     "sglang/srt/layers/quantization/fp8_utils.py": "58b328cd340591eeca404a24a223030c32548f576b285e06c41b768f8dd1b382",
     "sglang/srt/layers/attention/trtllm_mla_backend.py": "ffe156f30a14228a648f36eeecc43810392cb62ec748c24c8d7f2b14fdcbc65e",
@@ -19,5 +19,15 @@
     "flashinfer/data/csrc/trtllm_fused_moe_runner.cu": "480f32507a52bb7963922abc9d7fe122d8b16811eeffc12fc41ec5b6c411e953",
     "sglang/srt/layers/deep_gemm_wrapper/configurer.py": "be4301359c7746aba412dc4c5006d37ca2628b73035cb06cf37665b20b713625",
     "sglang/srt/layers/quantization/fp8_kernel.py": "b98500e0b3283e8001ed088ac9af3d0bf06c0c552a2da9ae8296a230fa9e6f93"
+  },
+  "baseline_identity": "sglang0.5.5.post3+R1-routing-compat",
+  "routing_compat": {
+    "stock_sha256": "620cd09545404fd62952e2239b905cfb26bc7565b361ac76bdf8f6d89ca80f49",
+    "patched_sha256": "6fa332b6aad5017d336c50826ecac5e1aa8ff446821c5a860ba83f930234f835",
+    "patch_tool_sha256": "274db85e1f0bebbad43c0456e1c96ddb7036364aa8854788c5d30626191e47ca",
+    "receipt_directories_by_rank": [
+      "sglang-routing-compat-node0/patch",
+      "sglang-routing-compat-v2/patch"
+    ]
   }
 }

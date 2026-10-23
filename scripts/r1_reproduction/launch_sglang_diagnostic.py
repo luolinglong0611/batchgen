@@ -6,6 +6,7 @@ GPUs hidden. Weight receipts attest historical verification only: this script
 does not rehash 641 GiB of source weights or claim full-tree source verification.
 """
 import argparse
+import difflib
 import hashlib
 import json
 import mmap
@@ -20,6 +21,14 @@ ROOT = Path('/home/admin/batchgen-r1-repro-20261023')
 WEIGHTS = Path('/mnt/fuse/oss/luolinglong.lll/models/DeepSeek-R1-original-fp8')
 HOSTS = ('serverless-010066009163.wm226', 'serverless-010066009166.wm226')
 MANIFEST_SHA = 'd9b7aeac6a69ad2f40d885f04bd7c1eaeac766f681e6be374980edf8c504a253'
+BASELINE_IDENTITY = 'sglang0.5.5.post3+R1-routing-compat'
+ROUTING_SOURCE = 'sglang/srt/models/deepseek_v2.py'
+ROUTING_STOCK_SHA = '620cd09545404fd62952e2239b905cfb26bc7565b361ac76bdf8f6d89ca80f49'
+ROUTING_PATCHED_SHA = '6fa332b6aad5017d336c50826ecac5e1aa8ff446821c5a860ba83f930234f835'
+ROUTING_TOOL_SHA = '274db85e1f0bebbad43c0456e1c96ddb7036364aa8854788c5d30626191e47ca'
+CONFIG_SHA = '4422016f41c506339e0510a32812a63da554dc9febd5f1368e7240ded14e4a27'
+ROUTING_ENV = {'BATCHGEN_SGLANG_R1_ROUTING_COMPAT': '1'}
+ROUTING_RECEIPT_DIRS = ('sglang-routing-compat-node0/patch', 'sglang-routing-compat-v2/patch')
 VERSIONS = {'sglang': '0.5.5.post3', 'torch': '2.9.0+cu130',
             'triton': '3.5.0+git4caa0328', 'nvidia-nccl-cu13': '2.28.3',
             'sgl-kernel': '0.3.17.post1', 'flashinfer-python': '0.5.2',
@@ -42,6 +51,7 @@ def plan(root, rank, inherited=None):
         'TRITON_PTXAS_BLACKWELL_PATH', 'NVIDIA_VISIBLE_DEVICES', 'TORCH_CUDA_CHANNEL',
     })
     env = {
+        **ROUTING_ENV,
         'CUDA_VISIBLE_DEVICES': '0,1,2,3,4,5,6,7', 'CUDA_HOME': str(toolkit),
         'PATH': f'{base}/baseline-env/bin:{toolkit}/bin:/usr/local/bin:/usr/bin:/bin',
         'LD_LIBRARY_PATH': f'{base}/private-cxx-runtime/lib:{base}/baseline-env/lib/python3.11/site-packages/nvidia/cu13/lib',
@@ -133,6 +143,62 @@ def inspect_weights(weights, manifest_path):
             'weight_bytes': sum(f['Size'] for n, f in selected.items() if n in names)}
 
 
+def routing_compat_plan(root, rank):
+    return {'identity': BASELINE_IDENTITY, 'stock_sha256': ROUTING_STOCK_SHA,
+            'patched_sha256': ROUTING_PATCHED_SHA, 'patch_tool_sha256': ROUTING_TOOL_SHA,
+            'receipt_path': str(root / ROUTING_RECEIPT_DIRS[rank] / 'receipt.json'),
+            'activation_env': dict(ROUTING_ENV),
+            'scope': 'R1-only routing None to DeepSeekV3 enum2; not stock SGLang or full-model qualification'}
+
+
+def inspect_routing_compat(root, rank, site, pins, env):
+    expected = routing_compat_plan(root, rank)
+    pin = pins.get('routing_compat')
+    if (pins.get('baseline_identity') != BASELINE_IDENTITY
+            or pins['files'].get(ROUTING_SOURCE) != ROUTING_PATCHED_SHA
+            or pin != {'stock_sha256': ROUTING_STOCK_SHA,
+                       'patched_sha256': ROUTING_PATCHED_SHA,
+                       'patch_tool_sha256': ROUTING_TOOL_SHA,
+                       'receipt_directories_by_rank': list(ROUTING_RECEIPT_DIRS)}):
+        raise RuntimeError('Routing compatibility pins changed; re-audit required')
+    if any(env.get(key) != value for key, value in ROUTING_ENV.items()):
+        raise RuntimeError('Routing compatibility activation environment missing')
+    receipt_path = Path(expected['receipt_path'])
+    backup = receipt_path.parent / 'deepseek_v2.py.stock'
+    diff_path = receipt_path.parent / 'patch.diff'
+    source = site / ROUTING_SOURCE
+    tool = Path(__file__).with_name('patch_sglang_r1_routing.py')
+    for path in (receipt_path, backup, diff_path, source, tool):
+        if path.is_symlink() or not path.is_file():
+            raise RuntimeError(f'Routing compatibility evidence must be a regular file: {path}')
+    receipt = json.loads(receipt_path.read_text())
+    required = {'status': 'applied_NOT_GPU_qualified',
+                'identity': 'sglang0.5.5.post3+r1-routing-None-compat',
+                'source_path': str(source), 'backup_path': str(backup),
+                'stock_sha256': ROUTING_STOCK_SHA, 'patched_sha256': ROUTING_PATCHED_SHA,
+                'config_sha256': CONFIG_SHA, 'manifest_sha256': MANIFEST_SHA,
+                'patch_tool_sha256': ROUTING_TOOL_SHA, 'activation_env': ROUTING_ENV}
+    if any(receipt.get(key) != value for key, value in required.items()):
+        raise RuntimeError('Routing compatibility receipt mismatch')
+    for path, digest in ((source, ROUTING_PATCHED_SHA), (backup, ROUTING_STOCK_SHA),
+                         (tool, ROUTING_TOOL_SHA), (WEIGHTS / 'config.json', CONFIG_SHA),
+                         (Path(__file__).with_name('r1_model_manifest.json'), MANIFEST_SHA)):
+        if sha(path) != digest:
+            raise RuntimeError(f'Routing compatibility artifact SHA mismatch: {path}')
+    # Verify the saved diff describes exactly the stock backup and current file.
+    exact_diff = ''.join(difflib.unified_diff(
+        backup.read_text().splitlines(True), source.read_text().splitlines(True),
+        fromfile=ROUTING_SOURCE + '.stock', tofile=ROUTING_SOURCE + '.r1-compat'))
+    if diff_path.read_text() != exact_diff:
+        raise RuntimeError('Routing compatibility saved diff mismatch')
+    return {**expected, 'status': 'current_artifacts_and_patch_receipt_verified_NOT_GPU_qualified',
+            'receipt_sha256': sha(receipt_path), 'receipt_status': receipt['status'],
+            'source_path': str(source), 'backup_path': str(backup),
+            'diff_path': str(diff_path), 'diff_sha256': sha(diff_path),
+            'patch_tool_path': str(tool), 'config_sha256': CONFIG_SHA,
+            'manifest_sha256': MANIFEST_SHA}
+
+
 def inspect(root, rank, env, unset, command):
     if not Path('/.dockerenv').exists() or socket.gethostname() != HOSTS[rank]:
         raise RuntimeError('Inspect only inside the expected allocated container')
@@ -142,6 +208,7 @@ def inspect(root, rank, env, unset, command):
     current = {name: sha(site / name) for name in pins['files']}
     if current != pins['files']:
         raise RuntimeError('Reviewed installed source files changed; re-audit required')
+    routing_compat = inspect_routing_compat(root, rank, site, pins, env)
     provenance = json.loads((base / 'private-cxx-runtime/provenance.json').read_text())
     for name, item in provenance['libraries'].items():
         if sha(base / 'private-cxx-runtime/lib' / name) != item['sha256']:
@@ -173,6 +240,7 @@ def inspect(root, rank, env, unset, command):
         raise RuntimeError('Baseline bundled ptxas is no longer CUDA12.9; re-audit required')
     return {'status': 'CPU_artifact_inspection_passed_NOT_GPU_qualified',
             'hostname': socket.gethostname(), 'versions': versions,
+            'baseline_identity': BASELINE_IDENTITY, 'routing_compat': routing_compat,
             'critical_installed_source_sha256': current, 'source_scope': pins['scope'],
             'launch_help_sha256': hashlib.sha256(help_result.stdout.encode()).hexdigest(),
             'weights': weight_record,
@@ -200,6 +268,8 @@ def main():
                         *[f'{k}={v}' for k, v in env.items()], *command])
     result = {'status': 'plan_only_NOT_executed', 'environment': env, 'unset_environment': unset,
               'command': command, 'shell_command': shell,
+              'baseline_identity': BASELINE_IDENTITY,
+              'routing_compat': routing_compat_plan(args.root, args.node_rank),
               'scope': 'Fixed six greedy probes,128new tokens,2repeats; diagnostics only, not performance',
               'dense_backend': 'existing SGLang Triton FP8 with original FP32 block128 scales',
               'speculative_decoding': False, 'cuda_graphs': False, 'prefix_cache': False,
