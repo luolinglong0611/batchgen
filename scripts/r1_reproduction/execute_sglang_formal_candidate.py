@@ -23,7 +23,7 @@ import types
 HERE = Path(__file__).resolve().parent
 PINS = {
     'execute_sglang_diagnostic.py': '9b7da876347ed9f6defeedc3bf5b3d3c54574dfc1bd951f2713890b537ce7d19',
-    'plan_sglang_formal_candidate.py': '225fb380bd4a6ff955a673e9b553f6c00767af5ed986286264308a2f2cda448f',
+    'plan_sglang_formal_candidate.py': '20ed116f4591a55712b2660f21eec7d05b5f8fc841660797d26a6d579636548e',
     'launch_sglang_diagnostic.py': '86f4af26428fe98a2aafd43dceb53d655225ad1a6d818569aaca05a525bc102f',
     'r1_launch_safety.py': '3b06a6644b22d53343f89427834553c462fba0ee44f3ebf8a3cde3c5bccfe130',
     'sglang_diagnostic_source_pins.json': '019e1524ad03c45455620fa425cb707054baa866ffeb6d77bc6936d1c34dff5f',
@@ -115,7 +115,9 @@ class FormalContext:
         expected = self.formal.build_candidate(self.provider, help_text, candidate['topology'],
             candidate['nodes'][0]['effective_per_dp_rank_running_requests_target'],
             candidate['nodes'][0]['effective_per_dp_rank_prefill_chunk_tokens'],
-            candidate['kv_policy']['memory_fraction_static'])
+            candidate['kv_policy']['memory_fraction_static'],
+            candidate['cuda_graph_policy']['mode'],
+            candidate['cuda_graph_policy']['max_bs_per_dp_rank'])
         # Canonical bytes also distinguish JSON true/1 and 16/16.0.
         if self.base.digest(candidate) != self.base.digest(expected):
             raise ValueError('Whole candidate differs from pinned planner reconstruction')

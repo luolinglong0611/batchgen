@@ -26,7 +26,7 @@ def load(name, path):
 
 plan = load('formal_candidate', ROOT / 'scripts/r1_reproduction/plan_sglang_formal_candidate.py')
 diagnostic = load('formal_test_diagnostic', ROOT / 'scripts/r1_reproduction/launch_sglang_diagnostic.py')
-HELP = ' '.join(arg for arg in diagnostic.plan(diagnostic.ROOT, 0, {})[2] if arg.startswith('--'))
+HELP = ' '.join(arg for arg in diagnostic.plan(diagnostic.ROOT, 0, {})[2] if arg.startswith('--')) + ' --cuda-graph-max-bs'
 
 
 def candidate(topology='A', running=16, chunk=2048, fraction='0.85'):
@@ -105,6 +105,26 @@ class CandidatePolicyTest(unittest.TestCase):
                             'SGLANG_SUPPORT_CUTLASS_BLOCK_FP8', 'SGLANG_NVFP4_CKPT_FP8_GEMM_IN_ATTN'):
                     self.assertEqual(node['environment'][key], '0')
 
+    def test_explicit_graph128_only_changes_graph_flags_against_equal_concurrency_eager(self):
+        eager = candidate('A', 128, 2048, '0.85')
+        graph = plan.build_candidate(diagnostic, HELP, 'A', 128, 2048, '0.85', 'graph', 128)
+        self.assertEqual(graph['candidate_id'], 'A-c128-m085-k2048-graph-bs128')
+        self.assertEqual(graph['cuda_graph_policy']['capture_batch_sizes_expected'], [1, 2, 4, 8, 12] + list(range(16, 129, 8)))
+        self.assertEqual(graph['cuda_graph_policy']['max_gathered_moe_tokens_per_service_expected'], 2048)
+        self.assertFalse(graph['cuda_graph_policy']['actual_capture_replay_qualified'])
+        self.assertFalse(graph['performance_qualified'])
+        for old, new in zip(eager['nodes'], graph['nodes']):
+            expected = old['argv'].copy(); expected.remove('--disable-cuda-graph')
+            self.assertEqual(new['argv'], expected + ['--cuda-graph-max-bs', '128'])
+            self.assertEqual(new['environment'], old['environment'])
+        self.assertEqual(graph['client_contract'], eager['client_contract'])
+
+    def test_graph_limit_mode_and_default_bucket_constraints_fail_closed(self):
+        for mode, maximum in [('wrong', 16), ('graph', None), ('graph', True), ('graph', 16.0),
+                              ('graph', 0), ('graph', 3), ('graph', 32), ('eager', 16)]:
+            with self.subTest(mode=mode, maximum=maximum), self.assertRaises(ValueError):
+                plan.build_candidate(diagnostic, HELP, 'A', 16, 2048, '0.85', mode, maximum)
+
     def test_clean_environment_cannot_capture_credentials_or_backend_override(self):
         with mock.patch.dict('os.environ', {'TEST_API_KEY': 'do-not-copy',
                                          'SGLANG_CUTLASS_MOE': '1', 'NCCL_RAS_ENABLE': '1'}):
@@ -158,7 +178,7 @@ class FixedSourceSemanticTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / 'plan.json'
             args = ['--topology', 'B', '--per-dp-running', '64', '--per-dp-chunk', '8192',
-                    '--memory-fraction', '0.90']
+                    '--memory-fraction', '0.90', '--execution-mode', 'eager']
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
                 plan.main(args)
@@ -185,6 +205,15 @@ class FixedSourceSemanticTest(unittest.TestCase):
                 namespace['_handle_data_parallelism'](args)
                 self.assertEqual(args.chunked_prefill_size, 8192)
                 self.assertEqual(args.schedule_conservativeness, 0.3)
+
+    def test_actual_non_spec_graph_bucket_method_matches_graph128_policy(self):
+        method = next(n for n in ast.walk(self.server_tree)
+                      if isinstance(n, ast.FunctionDef) and n.name == '_generate_cuda_graph_batch_sizes')
+        namespace = {}
+        exec(compile(ast.Module(body=[method], type_ignores=[]), '<pinned graph bucket method>', 'exec'), namespace)
+        args = SimpleNamespace(disable_cuda_graph_padding=False, speculative_algorithm=None, cuda_graph_max_bs=128)
+        graph = plan.build_candidate(self.diagnostic, self.help_text, 'A', 128, 2048, '0.85', 'graph', 128)
+        self.assertEqual(namespace[method.name](args), graph['cuda_graph_policy']['capture_batch_sizes_expected'])
 
     def test_actual_worker_request_limit_is_divided_and_pool_capped(self):
         tree = ast.parse((plan.DEFAULT_AUDIT / 'sglang/srt/managers/tp_worker.py').read_text())

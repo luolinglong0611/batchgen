@@ -80,6 +80,22 @@ class FormalExecutorTests(unittest.TestCase):
                 self.assertIn(f'node{rank}' if rank == 0 else 'compat-v2',
                               context.candidate['nodes'][rank]['routing_compat']['receipt_path'])
 
+    def test_graph128_whole_plan_reconstruction_and_qualification_tamper(self):
+        candidate = self.formal.build_candidate(self.diag, self.help, 'A', 128, 2048, '0.85', 'graph', 128)
+        for tamper in (False, True):
+            value = copy.deepcopy(candidate)
+            if tamper: value['cuda_graph_policy']['actual_capture_replay_qualified'] = True
+            self.args.candidate_plan.write_text(json.dumps(value))
+            self.args.expected_plan_sha256 = hashlib.sha256(self.args.candidate_plan.read_bytes()).hexdigest()
+            if tamper:
+                with self.assertRaisesRegex(ValueError, 'Whole candidate'): self.context()
+            else:
+                context = self.context()
+                self.assertEqual(context.candidate, candidate)
+                self.assertIn('source-audit/sglang/srt/model_executor/cuda_graph_runner.py', context.sources)
+                self.assertIn('source-audit/sglang/srt/layers/attention/trtllm_mla_backend.py', context.sources)
+                self.assertTrue(all('--disable-cuda-graph' not in row['command'] for row in context.configs))
+
     def test_whole_candidate_rejects_edited_argv_env_capacity_identity_and_extra_fields(self):
         mutations = [lambda c: c['nodes'][0]['argv'].append('--foo'),
             lambda c: c['nodes'][1]['environment'].update(LD_PRELOAD='/wrong'),

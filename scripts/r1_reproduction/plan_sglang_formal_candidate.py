@@ -22,6 +22,8 @@ SOURCE_PINS = {
     'sglang/srt/managers/tp_worker.py': 'bb33eaf8231a1ea26b86ccb67034ad49d6f673998979c6bd5c949311eaea8691',
     'sglang/srt/managers/data_parallel_controller.py': 'e7eea6ddc9f6825782c1e8c9c3be9af92e5cfd196a894cf39ad55aef1a23cbba',
     'sglang/srt/model_executor/model_runner.py': 'c16d0d2b133e0e1efd7d338034a7908e662bbadab1dcef418418c08c28910c45',
+    'sglang/srt/model_executor/cuda_graph_runner.py': 'b6435c9c63252bb7c8e97a6aae601e69859c573c01c5d45bf737cf78a3e1074b',
+    'sglang/srt/layers/attention/trtllm_mla_backend.py': 'ffe156f30a14228a648f36eeecc43810392cb62ec748c24c8d7f2b14fdcbc65e',
     'launch-server-help.stdout': '6796ce283ff97871da166af089028cf77c461e8ab2af266e9cb85d3afb9ccde0',
 }
 # Previously observed allocated-container addresses; no arbitrary remote targets.
@@ -71,7 +73,8 @@ def replace_value(command, flag, value):
 
 
 def build_candidate(diagnostic, help_text, topology, per_dp_running,
-                    per_dp_chunk, memory_fraction):
+                    per_dp_chunk, memory_fraction, execution_mode='eager',
+                    cuda_graph_max_bs=None):
     if topology not in ('A', 'B'):
         raise ValueError('Topology must be A or B')
     if type(per_dp_running) is not int or per_dp_running not in RUNNING_CHOICES:
@@ -80,9 +83,23 @@ def build_candidate(diagnostic, help_text, topology, per_dp_running,
         raise ValueError('Unsupported per-DP-rank prefill chunk')
     if memory_fraction not in FRACTION_CHOICES:
         raise ValueError('Memory fraction must be the explicit string 0.85 or 0.90')
+    if execution_mode not in ('eager', 'graph'):
+        raise ValueError('Execution mode must be eager or graph')
+    capture_sizes = []
+    if execution_mode == 'graph':
+        if type(cuda_graph_max_bs) is not int or not 1 <= cuda_graph_max_bs <= per_dp_running:
+            raise ValueError('Graph maximum must be a positive integer <= per-DP running target')
+        # Pinned server_args.py:849-877, non-spec default capture buckets.
+        capture_sizes = [n for n in [1, 2, 4, 8, 12] + list(range(16, 129, 8))
+                         if n <= cuda_graph_max_bs]
+        if cuda_graph_max_bs not in capture_sizes:
+            raise ValueError('Graph maximum must be an actual default capture bucket')
+    elif cuda_graph_max_bs is not None:
+        raise ValueError('Eager mode must not specify a CUDA graph maximum')
     dp = 16 if topology == 'A' else 8
     services = 1 if topology == 'A' else 2
-    candidate_id = f'{topology}-c{per_dp_running}-m{memory_fraction.replace(".", "")}-k{per_dp_chunk}-eager'
+    mode_id = 'eager' if execution_mode == 'eager' else f'graph-bs{cuda_graph_max_bs}'
+    candidate_id = f'{topology}-c{per_dp_running}-m{memory_fraction.replace(".", "")}-k{per_dp_chunk}-{mode_id}'
     nodes = []
     for physical_node in (0, 1):
         # Empty inherited mapping: no credentials or caller-specific environment
@@ -106,6 +123,11 @@ def build_candidate(diagnostic, help_text, topology, per_dp_running,
             replace_value(command, flag, value)
         limit_index = command.index('--max-total-tokens')
         del command[limit_index:limit_index + 2]
+        if execution_mode == 'graph':
+            if command.count('--disable-cuda-graph') != 1:
+                raise ValueError('Expected the original diagnostic eager flag exactly once')
+            command.remove('--disable-cuda-graph')
+            command.extend(['--cuda-graph-max-bs', str(cuda_graph_max_bs)])
         diagnostic.check_help(command, help_text)
         review_argv = ['env', '-i'] + [f'{key}={value}' for key, value in sorted(env.items())] + command
         nodes.append({
@@ -140,6 +162,15 @@ def build_candidate(diagnostic, help_text, topology, per_dp_running,
         'total_dp_ranks': 16,
         'cluster_running_requests_target': per_dp_running * 16,
         'cluster_prefill_chunk_tokens_target': per_dp_chunk * 16,
+        'cuda_graph_policy': {
+            'mode': execution_mode, 'max_bs_per_dp_rank': cuda_graph_max_bs,
+            'capture_batch_sizes_expected': capture_sizes,
+            'dp_decode_bucket_selection': 'smallest captured bucket >= maximum local DP decode batch',
+            'padding_mode_if_enabled': 'MAX_LEN',
+            'max_gathered_moe_tokens_per_service_expected': cuda_graph_max_bs * dp if capture_sizes else None,
+            'prefill_graph_enabled': False, 'actual_capture_replay_qualified': False,
+            'memory_admission': 'Explicit mem_fraction skips automatic graph reserve; measure graph_mem_usage and free memory.',
+        },
         'kv_policy': {
             'cli_dtype': 'auto', 'required_effective_dtype_every_rank': 'torch.bfloat16',
             'max_total_tokens_argument': None,
@@ -156,7 +187,7 @@ def build_candidate(diagnostic, help_text, topology, per_dp_running,
             'weight_scales': 'original F32 block128; no UE8M0 conversion selected',
             'dtype': 'bfloat16', 'attention': 'trtllm_mla',
             'moe': 'flashinfer_trtllm', 'expert_parallel_size': 1,
-            'cuda_graphs': False, 'radix_cache': False, 'speculative_decoding': False,
+            'cuda_graphs': execution_mode == 'graph', 'radix_cache': False, 'speculative_decoding': False,
             'shared_experts_fusion': False,
             'effective_schedule_conservativeness_from_defaults': 0.3,
             'max_prefill_tokens_from_defaults': 16384,
@@ -199,6 +230,7 @@ def build_candidate(diagnostic, help_text, topology, per_dp_running,
             'Resolve model-quality admission, including prior short/empty-EOS diagnostics; successful HTTP is insufficient.',
             'Explicit lifecycle supervision and owned-process cleanup on both nodes; no direct execution of review strings.',
             'Tune on separate subsets, freeze selected configuration, then run unchanged 6000-request profiles.',
+            *(['Qualify capture and actual replay on all ranks, including uneven/idle/padded DP batches and prefill-to-decode transitions; eager results do not qualify graph mode.'] if capture_sizes else []),
         ],
     }
 
@@ -209,12 +241,15 @@ def main(argv=None):
     parser.add_argument('--per-dp-running', required=True, type=int, choices=RUNNING_CHOICES)
     parser.add_argument('--per-dp-chunk', required=True, type=int, choices=CHUNK_CHOICES)
     parser.add_argument('--memory-fraction', required=True, choices=FRACTION_CHOICES)
+    parser.add_argument('--execution-mode', required=True, choices=('eager', 'graph'))
+    parser.add_argument('--cuda-graph-max-bs', type=int, help='Graph only: actual capture bucket <= per-DP running target')
     parser.add_argument('--source-audit', type=Path, default=DEFAULT_AUDIT)
     parser.add_argument('--output', type=Path, help='Create a new local JSON file; never overwrite')
     args = parser.parse_args(argv)
     diagnostic, help_text = load_inputs(args.source_audit)
     candidate = build_candidate(diagnostic, help_text, args.topology,
-                                args.per_dp_running, args.per_dp_chunk, args.memory_fraction)
+                                args.per_dp_running, args.per_dp_chunk, args.memory_fraction,
+                                args.execution_mode, args.cuda_graph_max_bs)
     encoded = json.dumps(candidate, indent=2, sort_keys=True) + '\n'
     if args.output:
         with args.output.open('x') as stream:
