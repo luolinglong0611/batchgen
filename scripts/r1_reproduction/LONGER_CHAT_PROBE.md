@@ -1,0 +1,115 @@
+# Independent R1 chat probes
+
+`longer_chat_probe.py` freezes new protocols from the original six-case fixture
+whose exact SHA256 is
+`f7ed0434a2894d604115affeed28ba279e59acda0794932d6a21359fa649d53d`.
+The original fixture, its chat strings/input IDs/teacher references, existing
+6000 workloads, 64-QA data, and numerical gates are never edited. This tool
+uses only Python's standard library and existing standard-library client helpers.
+
+| Protocol | Requests | Output cap | Submission |
+| --- | --- | --- | --- |
+| `r1-longer-chat-2048-v1` | Six original chat cases, two copies each | 2048 | One BatchGen batch, or 12 SGLang `/generate` requests with concurrency 12 |
+| `r1-identical-arithmetic-16x128-v1` | 16 copies of the original arithmetic chat, with identical prompt/input IDs | 128 | One BatchGen batch; native mode also supports 16 concurrent requests |
+
+Both use greedy temperature 0/top-p 1/top-k 1, allow EOS, and declare protocol
+seed 20261023. SGLang receives `sampling_seed`; BatchGen has no request seed
+field and uses greedy argmax. Teacher text/IDs remain in the frozen requests
+as references; **no teacher-forced requests are sent**. A 2048-token cap may
+still truncate thinking. Empty completions and finish metadata are retained.
+
+Prepare and plan are CPU-only and make no HTTP calls. Invoking the script
+without a subcommand prints help and performs no work. Use a new directory:
+
+```sh
+python scripts/r1_reproduction/longer_chat_probe.py prepare \
+  --fixture /path/correctness-fixture-v1.json \
+  --probe longer-chat --output /path/longer-chat-2048-v1
+
+python scripts/r1_reproduction/longer_chat_probe.py prepare \
+  --fixture /path/correctness-fixture-v1.json \
+  --probe identical-arithmetic --output /path/identical-arithmetic-16-v1
+```
+
+Prepare prints the manifest SHA. The new directory contains the original
+fixture's **unmodified bytes**, a request file, and a manifest pinning these
+files, generation settings, source helper hashes and all request IDs. Loading
+also reconstructs the exact expected requests from the pinned source fixture;
+rehashing a modified prompt/input-ID/teacher/order file does not make it valid.
+
+Plan requires a backend, the explicit expected manifest SHA, one endpoint, and
+a deployment-source JSON plus its expected SHA. The source may be an existing
+deployment JSON or a run JSON with a `deployment` object. It must satisfy the
+original fixed diagnostic's precision/tokenizer/source declarations, including
+the audited SGLang commit `7b2fb3d47c9dc43367c6fd3bf9396f7ba45e6883`.
+This is a pinned operator declaration, not remote verification of the server.
+The full source JSON is copied verbatim when collecting a run.
+
+```sh
+python scripts/r1_reproduction/longer_chat_probe.py plan \
+  --backend batchgen \
+  --manifest /path/longer-chat-2048-v1/manifest.json \
+  --expected-manifest-sha256 MANIFEST_SHA \
+  --deployment-source /path/observed-bg-deployment.json \
+  --expected-deployment-sha256 DEPLOYMENT_SHA \
+  --endpoint http://node0:8000 --output /path/bg-longer-plan.json
+```
+
+Only the explicit `run` subcommand sends requests. Replace `plan` with `run`
+and set `--output` to a new run directory after the deployment is admitted by
+the coordinating operator. For native SGLang, use `--backend sglang`, its
+deployment-source JSON, and `--endpoint http://node0:30000`. The identical-16
+protocol is independently planned/run by supplying its separate manifest.
+No service is launched or stopped. There are no discovery requests, warmups,
+HTTP retries, automatic cancellation, API-key discovery, or GPU operations.
+An external bounded guardian should own any actual client process.
+
+BatchGen receives one files upload and one batch creation for the entire
+request list. Polling and result downloads use the existing batch client with
+a 1200-second phase deadline, 60-second per-HTTP timeout and EOS allowed.
+The batch-level context limit is frozen at 4096, covering every input plus its
+output cap; this is a short diagnostic rather than a formal KV-budget comparison.
+Original downloaded result files and the complete parsed batch results are
+retained. BatchGen API text is never re-tokenized into purported native IDs.
+Its run records explicitly mark API native IDs unavailable.
+
+SGLang receives the exact frozen `input_ids` through `/generate`, with
+`return_logprob=true`. All 12 long-chat HTTP calls can be in flight together;
+this is closed-loop concurrency 12 with exactly 12 total calls and a 1200-second
+per-call timeout. The identical-16 variant uses concurrency 16. HTTP concurrency
+does not guarantee identical internal scheduling or rank ownership across
+engines. Every received HTTP body is saved byte-for-byte as `*.http-body`, and
+the parsed response object, native `output_ids` if returned, output logprobs if
+returned, usage and finish metadata are retained. Responses are saved as each
+call finishes. Malformed/nonfinite responses remain collection failures with
+raw bytes preserved. No extra retry is sent after a failed call.
+
+The resulting `run.json` reports collection status and artifact hashes. It
+does **not** define a quality gate or compare native outputs across engines.
+The two long-chat copies share a mixed batch and may have different rank or
+batch histories. Their differences must not be presented as determinism results.
+Auxiliary client elapsed/rate fields are diagnostics and are not formal BCT.
+
+For the identical arithmetic probe, an operator may separately enable the
+opt-in `R1_NATIVE_TOKENS` worker trace in a fresh admitted engine. See
+[R1_NATIVE_TOKEN_TRACE.md](R1_NATIVE_TOKEN_TRACE.md). Preserve the exact
+service-run logs and associate records with the actual batch/UUID/global index
+and original prompt hash. Compare native IDs only for matching prompt hashes,
+complete traces and observed ownership. **Sixteen submitted requests do not
+prove all sixteen ranks were covered.** Actual `rank`/`assigned_rank` records
+must demonstrate coverage; missing/error/truncated traces remain missing
+evidence. The helper neither enables tracing nor assumes a rank mapping.
+To investigate fresh-engine first-wave ownership, this batch must be the first
+submitted wave after the operator's admitted launch. The helper records that
+intention but cannot prove freshness or prior endpoint activity.
+
+CPU verification, including fake transports and a twelve-worker barrier:
+
+```sh
+python tests/test_r1_longer_chat_probe.py
+```
+
+These tests exercise exact freezing, source/deployment pins, rehashed input
+tampering, single-batch submission, native response retention, empty EOS text,
+nonfinite/error handling, no retries and twelve in-flight mocked native calls.
+They do not load a model, call a real endpoint, or qualify GPU correctness.
