@@ -169,3 +169,34 @@ L2 为 0.04504316；没有据此增加通过门槛。
 固定客户端复用 12 条生成请求，另有 6 条独立 teacher-forced 参考请求。
 后者只提供 SGLang 参考 NLL，不能与 BatchGen 缺失的 logits/NLL 比较，
 也不能把这 18 次 HTTP 的整体耗时用作两引擎 BCT 对比。
+
+## 完整模型 v4 诊断结果（2026-10-23）
+
+v1 在加载完整权重后首次预热失败：R1 的 MoE 构造器保留了
+`routing_method_type=None`，原生 TRTLLM 接口要求整数。已保留原始异常和清理证据。
+仅针对原版 R1 的 grouped-sigmoid 配置增加显式 opt-in 的 None → DeepSeekV3=2
+兼容补丁；原权重与 scales 不变。实际基线身份因此是
+**`sglang0.5.5.post3+R1-routing-compat`**，不是未经修改的 upstream。
+补丁前后源码 SHA、独立实际 MoE apply 验证和部署回执均已保存。
+
+v2 只有过期的准备回执，v3 在空闲 GPU 检查时未准入；二者均未启动服务。
+重新检查后的 v4 在两节点完成加载与预热，运行目录为
+`$ROOT/sglang-diagnostic-v4-node0/1`，实际日志确认 BF16 KV。
+本条记录时服务仍运行；`ready` 不表示模型质量或性能通过。
+
+`$ROOT/correctness-sglang-v4/run.json` 已完成 12 条生成和 6 条 teacher-forced
+参考请求，均无请求错误。12 条生成全部达到 128 token 上限，共1536 token。
+6 组重复请求的原生 token IDs 和文本都完全一致，结论仅限本轮配置及这些请求。
+run SHA256：`a02840b0815168de45bc8c27c2d6f11a8fb79a148a95307cffe38addc80735b7`。
+
+`$ROOT/correctness-bg-v4-vs-sglang-v4.json` 保留兼容补丁身份与原始报告 SHA，
+两引擎文本逐条相同为 **0/12**；此前 BatchGen 的6组重复文本均不相同。
+BatchGen 重复请求落在不同 DP rank 上，且该旧轮次使用修复前的 MGN 库，
+目前不能把差异归因于某一个 kernel。两引擎都在短上限内截断，
+文本不同也不能直接推导任务回答质量不等价。
+comparison SHA256：`83469679ca45dc8d40a58198a9e52bbdfec9d6daceb32ad25346f01bf9365556`。
+
+第一次离线对照因 client-env 缺少 transformers 失败，原日志保留；随后仅把
+离线对照解释器换成已有 BatchGen CPU 环境，未重跑请求、未修改生成或评分逻辑。
+teacher NLL 是在固定短 teacher 前缀下的条件概率参考，不能当作回答准确率。
+所有旧严格 attention 失败保持失败；正式6000请求性能实验尚未开始。
