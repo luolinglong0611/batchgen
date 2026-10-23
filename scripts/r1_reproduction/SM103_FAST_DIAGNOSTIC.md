@@ -120,3 +120,70 @@ It does not qualify prefill, other sequence lengths, NaN padding, whole-model
 quality or performance. The original gate failure and diagnostic exit2 remain.
 Replay report SHA256:
 `97deaa37a130afb6d7157cfd1b8a8e2e91712ea784ac8ef2d382b80cf9e2a9af`.
+
+## v4 source inventory and core-engine provenance
+
+The frozen `r1-fast-diagnostic-v4` ready1 records contain437 Python-source
+entries on node0 and432 on node1. All432 shared path/hash entries agree; their
+sorted compact JSON SHA256 is
+`3c6d447a03c8588046e03114738a01943eb5d3c983368ec1c69b5a12cf2c9f78`.
+The whole source trees are **not identical**. Node0 alone contributes four
+`batchgen/op_builder/*.py` inventory entries and Kimi Linear's `mla_triton.py`.
+The launcher uses `batchgen.rglob('*.py')`: node0's op_builder is a directory,
+whereas node1's is a symlink to the root op_builder. Resolved init, all_ops and
+core_engine Python sources match. The Kimi addition is outside the selected
+DeepSeek-R1 registry/parameter-server path.
+
+The two actual builder sources differ. Node0 SHA256 is
+`5feb4ed24eb4b0f76f1d850b549a4c478efaa890e4e7493229e63994c9a8277d`;
+node1 SHA256 is
+`a4ce53f9dec21035508f5b2f6a469c660878a3df7ed0bf4da06b90e2bce9a5be`.
+Their saved diff changes only `compute_capability_args`: numeric architecture
+sorting, parsing multi-digit major versions such as10.x, and using that major
+for BF16 eligibility. These are real compilation-flag differences; this audit
+does not establish equivalent rebuilds. The shared, pinned engine_loader
+imports the AOT `batchgen.core_engine` and rejects implicit JIT. No running
+model source or binary was changed to resolve this inventory check.
+
+Both core-engine files read at the frozen observation are271,668,832 bytes with SHA256
+`f0f0e5af58fb7c6f404e1e390b626556c5355497179b18af133bc729ed8a6a29`.
+Historical owned-process snapshots observe this pathname mapped in9 of10
+processes on each node. The recorded identities are:
+
+| Node | Path stat `(major,minor,inode)` | `/proc/maps` `(major,minor,inode)` | Backing-byte access |
+| --- | --- | --- | --- |
+|0|`(0,336,56263687)`|`(259,17,56263687)`|`map_files` readlink matches the pathname; stat/hash returns EPERM|
+|1|`(0,261,48413633)`|`(259,9,48413633)`|`map_files` readlink matches the pathname; stat/hash returns EPERM|
+
+The inode agrees within each node but the device identities differ. Therefore
+the on-disk SHA does **not** prove equality of the inaccessible mapped backing
+bytes, and no loaded-byte SHA is claimed. The snapshots have Unix timestamps
+1792792847.4684129/node0 and1792792847.278983/node1; they are historical
+observations, not a statement about any future cohort or current service state.
+
+The new metadata validator permits exactly the frozen432-entry common corpus
+and those five node0-only path/hash pairs, while retaining both original full
+maps with `whole_trees_identical=false`. Unknown extras, removals, node reversal
+or changes to the common corpus remain rejected. This explicit diagnostic
+provenance exception does not qualify model accuracy, performance, future
+rebuilds or unseen binaries; all earlier numerical and quality failures remain
+unchanged. Source review SHA256:
+`62111f61adb5708ddc2670091d823c67569c62280a43750ac0fcdadaf96af916`.
+Mapped evidence node0/node1 SHA256:
+`79f49d01de092f8a4c126d23b756cd1c1b1fedcce2613a52597b724020da43ec` /
+`f6aca55f85879bbca73ba185f299763324ef9c951c45cef331bcae9710871ee7`.
+
+
+The first v4 fixed-length pilot was admitted after new health/empty-queue
+observations on both nodes at2026-10-23 22:01:12 UTC. Its32 requests use the
+unchanged first32 input8192/output2048 payload, one separate excluded warmup,
+traceOFF and the original no-retry batch client. The CPU guard launched at
+22:03:21 UTC with PID1543390/start33490563; its child is
+PID1543467/start33491338. Admission SHA256 is
+`9600fe231365337a23e2d6cb8936d63af4663c5c67360c2245c7515ac78d045d`;
+actual launch SHA256 is
+`d235ca9274065f05f44ed96db0744f4e05c23fe8c73b947804e382a688c1f361`.
+At the saved22:07:57 UTC observation, the excluded warmup remained active
+with no guard violation. There is no completed BG BCT/throughput result from
+this pilot at that observation. Single-request decode log rates do not
+establish32/512/6000-request throughput or paper speedup.
