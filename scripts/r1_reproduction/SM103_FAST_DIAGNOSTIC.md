@@ -100,3 +100,23 @@ guardian and absent remote score remain preserved alongside an explicitly
 local-only score recomputation. These observations do not qualify quality or
 performance. Both owned v3 services were then stopped normally and all16 GPUs
 were independently observed idle before the next experiment.
+
+A subsequent isolated SGLang replay used the **same captured BF16 query, cache,
+page table, sequence lengths2047/2048/2049 and original R1 YaRN scale**. The only
+cache-layout adaptation was checked losslessly. SGLang0.5.5.post3's native
+FlashInfer0.5.2 TRTLLM MLA decode produced outputs bitwise equal to the archived
+BatchGen FlashInfer0.6.13 outputs in all196,608 elements, for both repeats.
+The SGLang runtime and fmha library paths were observed, and its original cubin
+loader returned two byte buffers whose hashes matched the requested hashes.
+No model weights, new generation requests or BatchGen runtime preload were used.
+
+Both outputs still fail the unchanged strict FP32-reference gate in
+6,291/196,608 elements; normalized RMS error to that unrounded reference is
+0.0023038945. These are different metrics: the3.199768% value is the fraction
+of elements exceeding the envelope, not a3.2% relative error. The same-input
+result establishes that this tested decode discrepancy is shared with the
+baseline, rather than introduced uniquely by BatchGen's FlashInfer version.
+It does not qualify prefill, other sequence lengths, NaN padding, whole-model
+quality or performance. The original gate failure and diagnostic exit2 remain.
+Replay report SHA256:
+`97deaa37a130afb6d7157cfd1b8a8e2e91712ea784ac8ef2d382b80cf9e2a9af`.
