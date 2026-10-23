@@ -129,7 +129,9 @@ class DeepSeek_Parameter_Server:
             self.shm_name,
             self.tensor_meta_shm_name,
             byte_size,
-            self.converted_ckpt_dir,
+            # pybind11's std::string argument does not accept pathlib.Path.
+            # Normalize both explicit directories and converter return values.
+            os.fsdecode(self.converted_ckpt_dir),
             self.state_dict_name_map,
         )
         return self.shm_name, self.tensor_meta_shm_name

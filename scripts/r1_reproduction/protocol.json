@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "full_model_startup_meta_rope_initialization_fix_pending",
+  "status": "full_model_startup_native_path_bridge_fix_pending",
   "model": "deepseek-ai/DeepSeek-R1",
   "model_revision": "20f2865710d161dc4a32c4e8c3d7c42c7b9852f8",
   "paper_reference": {
@@ -503,12 +503,17 @@
     "forward_executed": false,
     "performance_benchmark_executed": false,
     "speedup_established": false,
-    "status": "v1 exited during metadata-only RoPE construction on both nodes; full163shard hashes passed; no full weights allocation or inference",
+    "status": "v2 exited at native Parameter_Server.Init argument binding on both nodes; metadata-only RoPE fixed and real61layer smoke passed; full weight loading not yet started",
     "prior_failures": [
       {
         "run_id": "r1-diagnostic-v1",
         "phase": "DeepSeek_Parameter_Server._parse_state_dict",
         "error": "RoPE selected CUDA under ambient meta context; Cannot copy out of meta tensor"
+      },
+      {
+        "run_id": "r1-diagnostic-v2",
+        "phase": "DeepSeek_Parameter_Server.Init native bridge",
+        "error": "converted_ckpt_dir passed as pathlib.Path; C++ pybind signature requires str"
       }
     ]
   }
