@@ -15,7 +15,7 @@ import shlex
 REPO = Path(__file__).resolve().parents[2]
 DEFAULT_AUDIT = REPO / '.repro-private/baseline-recovery/formal-source-audit'
 RECEIPT_SHA = '7732753365d15c53297f88a6752bbb36bd1a9a9ac57c4d39a0a7a167f802ae1b'
-DIAGNOSTIC_SHA = '6decad7c8113cc9c68ad2c8e81c532ddf25c1594138b6c31471d9dc8fd59e361'
+DIAGNOSTIC_SHA = '86f4af26428fe98a2aafd43dceb53d655225ad1a6d818569aaca05a525bc102f'
 ROUTING_PINS_SHA = '019e1524ad03c45455620fa425cb707054baa866ffeb6d77bc6936d1c34dff5f'
 SOURCE_PINS = {
     'sglang/srt/server_args.py': '34dfebfe793e7e7409ee69a71c77d3550039e20ed71bff0e954e23c0042bdfdf',

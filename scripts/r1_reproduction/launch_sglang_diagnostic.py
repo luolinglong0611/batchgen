@@ -49,6 +49,9 @@ def plan(root, rank, inherited=None):
         'PYTHONPATH', 'PYTHONHOME', 'DISABLE_MMA_V5', 'TRITON_PTXAS_PATH',
         'CPATH', 'C_INCLUDE_PATH', 'CPLUS_INCLUDE_PATH', 'LIBRARY_PATH',
         'TRITON_PTXAS_BLACKWELL_PATH', 'NVIDIA_VISIBLE_DEVICES', 'TORCH_CUDA_CHANNEL',
+        'LD_PRELOAD', 'CUDA_PATH', 'CUDA_LIB_PATH', 'CUDACXX', 'NVCC',
+        'NVCC_PREPEND_FLAGS', 'NVCC_APPEND_FLAGS', 'CC', 'CXX',
+        'CPPFLAGS', 'CFLAGS', 'CXXFLAGS', 'LDFLAGS',
     })
     env = {
         **ROUTING_ENV,
@@ -67,6 +70,9 @@ def plan(root, rank, inherited=None):
         'SGLANG_SUPPORT_CUTLASS_BLOCK_FP8': '0',
         'SGLANG_NVFP4_CKPT_FP8_GEMM_IN_ATTN': '0',
         'NCCL_SOCKET_IFNAME': 'eth0', 'GLOO_SOCKET_IFNAME': 'eth0',
+        # Explicitly restore this after removing inherited NCCL_* overrides.
+        # Do not inherit BatchGen's private runtime preload or compiler flags.
+        'NCCL_RAS_ENABLE': '0',
         'NCCL_IB_GID_INDEX': '3',
         'NCCL_IB_HCA': '=' + ','.join(f'mlx5_bond_{i}:1' for i in range(8)),
         'HF_HUB_OFFLINE': '1', 'TRANSFORMERS_OFFLINE': '1',

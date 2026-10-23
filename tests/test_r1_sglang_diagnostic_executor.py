@@ -53,6 +53,58 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(actual, {'NORMAL': 'kept', **env})
         self.assertNotIn('TRITON_PTXAS_PATH', actual)
 
+    def test_real_planner_merge_pins_RAS_and_isolates_batchgen_CUDA_overrides(self):
+        planner = e.load_planner()
+        poisoned = {
+            'LD_PRELOAD': '/batchgen/libcudart.so.13', 'CUDA_PATH': '/batchgen/cuda',
+            'CUDA_LIB_PATH': '/batchgen/cuda/lib', 'CUDA_HOME': '/batchgen/cuda',
+            'LD_LIBRARY_PATH': '/batchgen/cuda/lib', 'CPATH': '/batchgen/include',
+            'LIBRARY_PATH': '/batchgen/link', 'CUDACXX': '/batchgen/nvcc',
+            'NVCC': '/batchgen/nvcc', 'NVCC_PREPEND_FLAGS': '-I/batchgen/include',
+            'NVCC_APPEND_FLAGS': '--device-debug', 'CC': '/batchgen/cc',
+            'CXX': '/batchgen/cxx', 'CPPFLAGS': '-I/batchgen/include',
+            'CFLAGS': '-O0', 'CXXFLAGS': '-O0', 'LDFLAGS': '-L/batchgen/lib',
+            'FLASHINFER_NVCC': '/batchgen/nvcc',
+            'FLASHINFER_WORKSPACE_BASE': '/batchgen/flashinfer',
+            'TRITON_PTXAS_PATH': '/batchgen/ptxas', 'DISABLE_MMA_V5': '1',
+        }
+        for rank in (0, 1):
+            for RAS in (None, '0', '1'):
+                with self.subTest(rank=rank, inherited_RAS=RAS):
+                    inherited = dict(poisoned)
+                    if RAS is not None:
+                        inherited['NCCL_RAS_ENABLE'] = RAS
+                    env, unset, command = planner.plan(e.ROOT, rank, inherited)
+                    actual = e.child_environment({'environment': env, 'unset_environment': unset}, inherited)
+                    self.assertEqual(actual, env)
+                    self.assertEqual(actual['NCCL_RAS_ENABLE'], '0')
+                    for key in poisoned:
+                        if key not in env:
+                            self.assertNotIn(key, actual)
+                    base = e.ROOT / 'sglang-baseline-v8'
+                    toolkit = e.ROOT / 'cuda130-packages/nvidia/cu13'
+                    self.assertEqual(actual['CUDA_HOME'], str(toolkit))
+                    self.assertEqual(actual['PATH'].split(':')[:2],
+                                     [str(base / 'baseline-env/bin'), str(toolkit / 'bin')])
+                    self.assertEqual(Path(actual['CUDA_HOME']) / 'bin/nvcc', toolkit / 'bin/nvcc')
+                    self.assertEqual(command[0], str(base / 'baseline-env/bin/python'))
+                    self.assertEqual(actual['CPATH'], str(base / 'baseline-env/lib/python3.11/site-packages/nvidia/cu13/include'))
+                    self.assertEqual(actual['LD_LIBRARY_PATH'],
+                        f'{base}/private-cxx-runtime/lib:{base}/baseline-env/lib/python3.11/site-packages/nvidia/cu13/lib')
+
+    def test_historical_launcher_source_receipt_cannot_authorize_new_plan(self):
+        local, peer, config = self.receipts()
+        sources = e.source_hashes()
+        local['source_sha256'] = dict(sources)
+        peer['source_sha256'] = dict(sources)
+        e.validate_receipts(local, peer, 0, 'same', 1001, sources, config)
+        historical = dict(sources)
+        historical['launch_sglang_diagnostic.py'] = '6decad7c8113cc9c68ad2c8e81c532ddf25c1594138b6c31471d9dc8fd59e361'
+        self.assertNotEqual(historical['launch_sglang_diagnostic.py'], sources['launch_sglang_diagnostic.py'])
+        peer['source_sha256'] = historical
+        with self.assertRaisesRegex(RuntimeError, 'identity/cohort/source mismatch'):
+            e.validate_receipts(local, peer, 0, 'same', 1001, sources, config)
+
     def receipts(self):
         config = {'environment': {}, 'unset_environment': [], 'command': ['model']}
         local = {'status': 'prepared_NOT_started', 'node_rank': 0, 'hostname': e.HOSTS[0],

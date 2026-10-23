@@ -33,6 +33,7 @@ class SGLangDiagnosticPlanTest(unittest.TestCase):
             self.assertEqual(env['SGLANG_ENABLE_JIT_DEEPGEMM'], '0')
             self.assertEqual(env['SGLANG_ENABLE_FLASHINFER_FP8_GEMM'], '0')
             self.assertEqual(env['SGLANG_SUPPORT_CUTLASS_BLOCK_FP8'], '0')
+            self.assertEqual(env['NCCL_RAS_ENABLE'], '0')
 
     def test_inherited_batchgen_compiler_and_backend_overrides_removed(self):
         inherited = {'CPATH': '/bad/include', 'CPLUS_INCLUDE_PATH': '/bad/cxx', 'LIBRARY_PATH': '/bad/lib', 'DISABLE_MMA_V5': '1', 'TRITON_PTXAS_PATH': '/cuda13/ptxas',

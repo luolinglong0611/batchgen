@@ -84,6 +84,16 @@ inherited credentials or `SGLANG_CUTLASS_MOE` cannot alter the plan. It includes
 expected SGLang package version is recorded, but whether the **loaded** NCCL
 library matches BatchGen remains unknown here and needs runtime provenance.
 
+The diagnostic provider now also emits explicit `NCCL_RAS_ENABLE=0` and clears
+inherited BatchGen runtime preloads and CUDA compiler overrides. This tool's
+`DIAGNOSTIC_SHA` follows that reviewed provider source; the audited installed
+SGLang source receipt and routing pins remain unchanged. Candidate A/B commands,
+capacity choices, and exact allowlisted environments retain their existing
+settings. A new diagnostic preparation must generate new source-bound receipts;
+historical diagnostic receipts are not rewritten or replayed. There is still
+no executor for these formal candidate JSON files: the diagnostic executor
+rebuilds its own small-capacity plan and is not a formal-candidate runner.
+
 ## Admission and fair measurement still required
 
 The existing diagnostic executor assumes one two-node service and small

@@ -200,3 +200,40 @@ comparison SHA256：`83469679ca45dc8d40a58198a9e52bbdfec9d6daceb32ad25346f01bf93
 离线对照解释器换成已有 BatchGen CPU 环境，未重跑请求、未修改生成或评分逻辑。
 teacher NLL 是在固定短 teacher 前缀下的条件概率参考，不能当作回答准确率。
 所有旧严格 attention 失败保持失败；正式6000请求性能实验尚未开始。
+
+## 后续轮次的环境与回执边界
+
+`sglang-baseline-v8` 是隔离安装目录；上文已验证的服务 cohort 是
+`sglang-r1-diagnostic-v4`。下一轮必须使用新的 cohort/run 目录、两节点新的
+prepare 回执和实际 executor/HTTP child 身份。旧回执含旧 source SHA，且只有
+600 秒有效期；旧运行目录保持 exclusive，不可把旧 PID 或 ready 状态移到新轮次。
+安装源码的 `sglang_diagnostic_source_pins.json` 保持不变。新的
+`source_hashes()` 会记录新 planner 的 SHA；不能通过修改历史回执适配新脚本。
+
+新 diagnostic plan 显式设置 `NCCL_RAS_ENABLE=0`。执行器先清理 inherited
+`NCCL_*`，随后合并 plan 的显式环境，因此继承值缺失、为 0 或为 1 都得到 0。
+不能只在外层 shell 设置此变量。正式候选计划本身也保留显式 0，但目前没有消费
+正式候选 JSON 的 executor；诊断 executor 只会重建自己的小容量 plan，不能拿它
+代替正式候选的拓扑、容量、准入和生命周期实现。
+
+新的清理列表同时排除继承的 `LD_PRELOAD`、`CUDA_PATH`、`CUDA_LIB_PATH`、
+`CUDACXX`、`NVCC`、NVCC 前后置 flags 和 C/C++ 编译/link flags。尤其不能把
+BatchGen 的私有 13.0.88 runtime preload、FlashInfer 0.6.13 workspace 或 ptxas
+override 传给 SGLang。外层启动器仍应使用明确的 SGLang 环境白名单，清理列表
+不等同于对所有任意第三方环境变量的完整白名单。
+
+SGLang 自身的显式设置保留：其独立 `baseline-env` 解释器、私有 C++ runtime、
+自己的 CUDA wheel headers/link symlink，以及既有
+`CUDA_HOME=$ROOT/cuda130-packages/nvidia/cu13` 和该目录的 `bin` 搜索路径。
+该共享目录原本就是 SGLang 的 nvcc 13.0.88 来源，不需要改装 SGLang 的
+Torch 2.9 / FlashInfer 0.5.2 环境。SGLang runtime wheel 的版本 pin 仍为
+13.0.48；新启动时必须重新记录实际加载库，不能只根据包元数据认定映射来源。
+Triton 自带 ptxas 12.9 的策略保持不变。
+
+当前冻结的长对话检查使用 `longer_chat_probe.py`：6 个固定输入各复制两次，
+共 12 条、每条最多 2048 token、greedy、允许 EOS、HTTP concurrency=12，
+不发送 teacher-forced 请求。它与上文 128-token/18-HTTP 的旧诊断不同，不能
+直接重放旧客户端。12 条只是质量诊断观察，不能据此弱化
+`SGLANG_FORMAL_CANDIDATES.md` 中的 A/B 拓扑、容量调优和最终性能测量。
+旧诊断 CLI max-running=16 在 DP16 下仅对应每 DP rank 的 1 个请求目标，
+不代表正式强基线的最优并发。
