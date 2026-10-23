@@ -419,7 +419,12 @@ def _check_r1_sm103_runtime(server_args: object) -> RuntimeContract:
     )
     return RuntimeContract(
         modules=("triton", "libucx"),
-        extensions=_COMMON_EXTENSIONS + ("batchgen_kernels.common._C_mgn_ops",),
+        # R1 uses latent-576 MLA, not the bundled SM90 GQA head-64/80/128
+        # binary in the legacy common contract. Check its real native calls.
+        extensions=(
+            "batchgen_kernels.attention._C_fused_ops",
+            "batchgen_kernels.common._C_mgn_ops",
+        ),
     )
 
 

@@ -64,6 +64,13 @@ class R1Preflight(unittest.TestCase):
         return SimpleNamespace(**{entry: lambda: None for entry in entries})
 
     def test_precision_runtime_checks_owned_entries_native_kernels_and_ucx_before_core(self):
+        # Released HEAD has a CUDA-12 SM90 GQA binary in the common contract.
+        # User worktrees may already narrow it; exercise both without depending
+        # on unrelated user changes to _COMMON_EXTENSIONS.
+        self.preflight._COMMON_EXTENSIONS = (
+            'batchgen_kernels.attention._C_fused_ops',
+            'batchgen_kernels.attention._C_gqa_mha_decode_bf16',
+        )
         self.assertEqual(self.preflight.run_runtime_preflight(self.args), 'deepseek_v3')
         self.assertIn(('triton', 'site'), self.calls)
         for name in ('batchgen.attention.mla.sm103_backend', 'batchgen.attention.mla.triton_precision',
@@ -72,6 +79,7 @@ class R1Preflight(unittest.TestCase):
         self.assertLess(self.calls.index('UCX-loaded'), self.calls.index('core-AOT'))
         names = [call[0] for call in self.calls if isinstance(call, tuple)]
         self.assertFalse(set(names) & {'flash_attn', 'flash_attn_interface', 'flash_mla', 'deep_gemm', 'flashinfer'})
+        self.assertNotIn('batchgen_kernels.attention._C_gqa_mha_decode_bf16', names)
 
     def test_every_required_opt_in_is_checked_before_core(self):
         for key in ENVIRONMENT:
@@ -109,7 +117,30 @@ class R1Preflight(unittest.TestCase):
         with self.assertRaisesRegex(self.preflight.RuntimePreflightError, 'paged_mla_decode'):
             self.preflight.run_runtime_preflight(self.args)
 
+    def test_each_actual_native_dependency_still_blocks_startup_when_missing(self):
+        for missing in ('batchgen_kernels.attention._C_fused_ops', 'batchgen_kernels.common._C_mgn_ops'):
+            with self.subTest(missing=missing):
+                self.calls.clear()
+
+                def checked_import(name, **kwargs):
+                    if name == missing:
+                        raise self.preflight.RuntimePreflightError(f'Missing native module {name}')
+                    return self.import_required(name, **kwargs)
+
+                self.preflight._import_required = checked_import
+                with self.assertRaisesRegex(self.preflight.RuntimePreflightError, 'Missing native module'):
+                    self.preflight.run_runtime_preflight(self.args)
+                self.assertNotIn('core-AOT', self.calls)
+
     def test_other_devices_and_models_keep_original_contract(self):
+        self.preflight._COMMON_EXTENSIONS = (
+            'batchgen_kernels.attention._C_fused_ops',
+            'batchgen_kernels.attention._C_gqa_mha_decode_bf16',
+        )
+        # RuntimeContract instances are frozen snapshots, as in committed HEAD.
+        for model_type in ('deepseek_v3', 'deepseek_v2'):
+            self.preflight._CONTRACTS[model_type] = self.preflight.RuntimeContract(
+                modules=('flash_attn', 'libucx'), extensions=self.preflight._COMMON_EXTENSIONS)
         for model_type, capability in [('deepseek_v3', (9, 0)), ('deepseek_v3', (10, 0)),
                                        ('deepseek_v2', (10, 3))]:
             with self.subTest(model=model_type, capability=capability), patch.dict(os.environ, {}, clear=True):
@@ -118,6 +149,8 @@ class R1Preflight(unittest.TestCase):
                 self.calls.clear()
                 self.preflight.run_runtime_preflight(self.args)
                 self.assertIn(('flash_attn', 'site'), self.calls)
+                self.assertIn(('batchgen_kernels.attention._C_gqa_mha_decode_bf16', 'batchgen'), self.calls)
+                self.assertNotIn(('batchgen_kernels.common._C_mgn_ops', 'batchgen'), self.calls)
                 self.assertNotIn(('batchgen.attention.mla.triton_precision', 'batchgen'), self.calls)
 
 

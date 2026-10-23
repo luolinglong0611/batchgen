@@ -359,5 +359,37 @@
     "reload_H2D": "exact BF16",
     "cross_node_migration_tested": false,
     "scope": "actual native worker view, small host page pool, single GPU per node"
+  },
+  "native_weight_dma_qualification": {
+    "status": "passed",
+    "node": "node1",
+    "report": "weight-dma-v1.json",
+    "bytes": 5234105216,
+    "tensor_count": 270,
+    "dtype_counts": {
+      "float8_e4m3fn": 127,
+      "float32": 127,
+      "bfloat16": 16
+    },
+    "host_registered": true,
+    "comparison": "source bin, attached host, GPU roundtrip exact bytes and SHA256",
+    "scope": "single shard, single spawned worker; owner holds anonymous memfd through worker exit; no675GiB multiworker registration tested"
+  },
+  "startup_preflight_qualification": {
+    "status": "passed",
+    "node": "node1",
+    "report": "startup-preflight-v2.json",
+    "cuda_allocated_bytes": 0,
+    "checks": [
+      "torch_cuda_version",
+      "explicit_SM103_backend",
+      "eager_only",
+      "tokenizer_assets_EOS_chat_template",
+      "Triton_site_origin",
+      "UCX_load",
+      "native_fused_MGN_origin",
+      "core_engine_AOT_freshness"
+    ],
+    "legacy_unused_GQA_note": "R1-specific contract excludes SM90 GQA artifact; other models retain original dependency checks"
   }
 }

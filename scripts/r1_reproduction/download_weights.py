@@ -78,8 +78,8 @@ def main():
         for k, n in [('Sha256', 64), ('Revision', 40)]:
             if len(f[k]) != n or any(c not in '0123456789abcdef' for c in f[k]):
                 ap.error('Manifest must contain pinned revisions and hashes')
-    if not 1 <= args.workers <= 8:
-        ap.error('workers must be 1..8')
+    if not 1 <= args.workers <= 16:
+        ap.error('workers must be 1..16')
     # Metadata first; then weights. Bound local scratch space to concurrent files.
     files.sort(key=lambda f: (f['Path'].endswith('.safetensors'), f['Path']))
     weights = [f for f in files if f['Path'].endswith('.safetensors')]
