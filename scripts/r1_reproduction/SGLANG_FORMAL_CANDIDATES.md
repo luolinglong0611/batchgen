@@ -400,3 +400,19 @@ configuration and single-request warmup limitations apply. These are SGLang
 tuning results, with no BatchGen speedup or model-quality claim. A separate
 512-request input2048/output8192 run started at20:29:32 UTC; its outcome is
 not included in this table.
+
+The input2048/output8192 pilot subsequently completed at20:41:59 UTC. All512
+requests passed the same fixed-length checks, with1048576 input tokens and
+4194304 output tokens. BCT was472.886555561 seconds, or8869.5775988475 output
+tokens/s; its270.281145006-second single-request warmup is excluded. Both
+original CPU processes were absent after natural exit0, without cleanup
+signals or remaining requests. The raw summary SHA256 is
+`9f6515e79ac87fd74e3114f1ce7d35d19dfbcf486142d3cdc09e02eb02131f54`;
+raw requests SHA256 is
+`f136fac7ce36575e0efe0fb791cacbeeefc2517825ae603f2c53ef394ff7d338`.
+Actual decode logs show32 running requests and graph replay on all16 ranks.
+The closed export SHA256 is
+`ab985cf4c7664ae9ea5d36dbdda6523e219d16702d79366d4c6f1807354fb7df`.
+This is still a single tuning observation. An input8192/output2048 first2048
+burst started at20:43:05 UTC to test the configured per-rank capacity more
+closely; it is not a completed result or a saturation claim.
