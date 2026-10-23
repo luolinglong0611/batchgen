@@ -88,5 +88,15 @@ elements with both FP32 and FP64 auxiliary references. Of those failures,
 6,236 have reference magnitude below 0.1; this locates much of the error near
 zero but does not change the original threshold or turn it into a pass.
 The corresponding Triton output agrees bitwise with rounded FP64 in
-196,607/196,608 elements. Numerical gates, broader paired QA, and capacity-tuned
-SGLang A/B performance measurements remain separate work.
+196,607/196,608 elements. Numerical gates and capacity-tuned SGLang A/B
+performance measurements remain separate work.
+
+The subsequent64-item paired clipped-context QA collection is now frozen; see
+[QA_SANITY.md](QA_SANITY.md). BatchGen returned all64 items, with63 validated
+and one repetition termination classified as a failure by the unchanged client.
+There were11 empty outputs and7 length-capped outputs. All64 native traces
+match the corresponding API counts and finish reasons. The original failed
+guardian and absent remote score remain preserved alongside an explicitly
+local-only score recomputation. These observations do not qualify quality or
+performance. Both owned v3 services were then stopped normally and all16 GPUs
+were independently observed idle before the next experiment.

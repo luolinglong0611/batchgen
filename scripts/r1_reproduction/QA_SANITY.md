@@ -128,4 +128,45 @@ floating-point aggregation differs from the original Python 3.11 aggregate by
 about 1e-17; explicit left-fold addition reproduces the original score bytes.
 No source score, metric or original report was changed. These raw, clipped prompts
 and incomplete answer observability cannot establish model quality or statistical
-equivalence. The paired BatchGen collection and formal performance campaign remain pending.
+equivalence. The formal performance campaign remains pending.
+
+2026-10-24 BatchGen `r1-fast-diagnostic-v3` completed the same 64 frozen inputs.
+All response IDs were present; 63 passed the existing client validation and
+`qa-0036` failed because its API finish was `repetition` after 768 tokens.
+This was a generated repetition termination, not an HTTP transport failure or
+worker crash. The client exited1, so its original guardian remains failed and
+the remote scoring step did not run. No generation was retried. Offline scoring
+uses the unchanged scorer and all64 items, including the failed item's zero score.
+
+| Observation / descriptive metric | BatchGen v3 | SGLang v4 |
+| --- | ---: | ---: |
+| Validated responses / denominator | 63/64 | 64/64 |
+| API reported stop / length / repetition | 56 / 7 / 1 | 59 / 5 / 0 |
+| Empty output text, all responses | 11 | 16 |
+| A raw text EM / token-F1 | 0 / 0.1069283559 | 0 / 0.1030309484 |
+| B observable suffix EM / token-F1 lower bound | 0.0625 / 0.2054005286 | 0.078125 / 0.2331822953 |
+| B suffix coverage | 44/64 | 36/64 |
+
+All64 BatchGen native completion traces match their frozen prompt token-ID
+hashes, API token counts and finish reasons, with32 traces from each node.
+The sole repetition log matches `qa-0036`, rank10, global index64 and768 tokens.
+The11 empty outputs each have one native token; this analysis does not separately
+bind the EOS configuration and does not infer an EOS cause from empty text.
+The two APIs' identical payloads were checked, but BatchGen's repetition breaker
+is an additional termination policy. These raw, clipped-context prompts are
+descriptive QA and do not establish statistical equivalence or general quality.
+Their different submission modes and zero warmup also preclude a speedup claim.
+
+Preserved hashes:
+
+- BatchGen original guardian: `c6060834a83ef912eaa8fcfef8b9e9131d898faeaa3af01fb49d86a81d39e6db`.
+- BatchGen original client summary: `96d6eda69fc9c061df88807e79f29c2f0d91b77be6115a42a76d8143668d1e78`.
+- BatchGen local-only recomputed score: `154444fb8f63d56453d393e1c9ed73d733f2f71185fa93b28a70d960d6db095c`.
+- Paired offline comparison: `d7dc81a680a513efdd8714cbcd33b86681ab1f1f7e3792bb0067474f4ffce104`.
+- Native/API pairing: `6b4dab05da0763a42c24d8acb1e9b8e709894f2b93204430a2bb79e9b233b000`.
+
+The original guardian's `server_requests_may_remain=true` is retained. A later,
+separate stop audit confirmed both owned model services exited0 after leader
+SIGTERM, all original live session members disappeared, and all16 GPUs had
+no compute processes, zero utilization and4MiB each. That later observation
+closes resource cleanup; it does not change the failed QA outcome.
