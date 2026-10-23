@@ -55,6 +55,7 @@ from transformers.utils import (
 )
 from transformers.utils.import_utils import is_torch_fx_available
 from .configuration_deepseek_v3 import DeepseekV3Config
+from .skeleton import make_linear, make_embedding
 import torch.distributed as dist
 import numpy as np
 import os
@@ -594,7 +595,7 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
 	return q_embed, k_embed
 
 from ....moe.fused_dequant_gemm import fused_fp8_bf16_gemm
-from ....attention.mla.fa3_backend import w8a16_gemm
+from .kernel_dispatch import w8a16_gemm
 
 class DeepseekV3MLP(nn.Module):
 	def __init__(self, config, hidden_size=None, intermediate_size=None):
@@ -605,9 +606,9 @@ class DeepseekV3MLP(nn.Module):
 			config.intermediate_size if intermediate_size is None else intermediate_size
 		)
 
-		self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
-		self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
-		self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=False)
+		self.gate_proj = make_linear(config, self.hidden_size, self.intermediate_size, bias=False)
+		self.up_proj = make_linear(config, self.hidden_size, self.intermediate_size, bias=False)
+		self.down_proj = make_linear(config, self.intermediate_size, self.hidden_size, bias=False)
 		self.act_fn = ACT2FN[config.hidden_act]
 
 	@torch.inference_mode()
@@ -897,15 +898,17 @@ class MoEGate(nn.Module):
 		logits = F.linear(hidden_states_flat.float(), self.weight.float(), None)
 		scores = torch.sigmoid(logits)
 		
-		# Custom kernel handles MoE routing
+		# The Python wrapper infers the expert count from scores; its fifth
+		# argument is topk, unlike the native C++ launcher's fifth argument.
+		# Shared experts are executed separately from routed expert selection.
 		topk_idx, topk_weight = moe_fused_gate(
-			scores,
-			self.e_score_correction_bias,
-			self.n_group,
-			self.topk_group,
-			self.n_routed_experts,
-			self.top_k,
-			self.routed_scaling_factor
+			input_tensor=scores,
+			bias=self.e_score_correction_bias,
+			num_expert_group=self.n_group,
+			topk_group=self.topk_group,
+			topk=self.top_k,
+			num_fused_shared_experts=0,
+			routed_scaling_factor=self.routed_scaling_factor,
 		)
 		
 		return topk_idx, topk_weight
@@ -1238,7 +1241,7 @@ from ....moe.fused_dequant_moe import (
 )
 from batchgen.gemm.w8a8_grouped_gemm_stage_1 import fused_fp8_moe_stage_1_optimized, fused_fp8_moe_stage_1_baseline_v2, fused_fp8_moe_stage_1_tma
 from batchgen.gemm.w8a8_grouped_gemm_stage_2 import fused_dequant_grouped_gemm_fp8_fp8_triton_optimized, fused_dequant_grouped_gemm_fp8_fp8_fp32_triton
-from ....attention.mla.fa3_backend import act_quant
+from .kernel_dispatch import act_quant
 from batchgen.quantization.block_quantization import act_quant_transposed_scale
 class DeepseekV3MoE_Decoding(nn.Module):
 	def __init__(self, config):
@@ -3525,32 +3528,32 @@ class DeepseekV3Attention(nn.Module):
 		self.is_causal = True
 
 		if self.q_lora_rank is None:
-			self.q_proj = nn.Linear(
+			self.q_proj = make_linear(config,
 				self.hidden_size, self.num_heads * self.q_head_dim, bias=False
 			)
 		else:
-			self.q_a_proj = nn.Linear(
+			self.q_a_proj = make_linear(config,
 				self.hidden_size, config.q_lora_rank, bias=config.attention_bias
 			)
 			self.q_a_layernorm = DeepseekV3RMSNorm(config.q_lora_rank)
-			self.q_b_proj = nn.Linear(
+			self.q_b_proj = make_linear(config,
 				config.q_lora_rank, self.num_heads * self.q_head_dim, bias=False
 			)
 
-		self.kv_a_proj_with_mqa = nn.Linear(
+		self.kv_a_proj_with_mqa = make_linear(config,
 			self.hidden_size,
 			config.kv_lora_rank + config.qk_rope_head_dim,
 			bias=config.attention_bias,
 		)
 		self.kv_a_layernorm = DeepseekV3RMSNorm(config.kv_lora_rank)
-		self.kv_b_proj = nn.Linear(
+		self.kv_b_proj = make_linear(config,
 			config.kv_lora_rank,
 			self.num_heads
 			* (self.q_head_dim - self.qk_rope_head_dim + self.v_head_dim),
 			bias=False,
 		)
 
-		self.o_proj = nn.Linear(
+		self.o_proj = make_linear(config,
 			self.num_heads * self.v_head_dim,
 			self.hidden_size,
 			bias=config.attention_bias,
@@ -4305,6 +4308,10 @@ class DeepseekV3PreTrainedModel(PreTrainedModel):
 	_supports_cache_class = True
 
 	def _init_weights(self, module):
+		# Empty serving placeholders are populated by the parameter server.
+		# In particular, indexing an empty embedding padding row is invalid.
+		if hasattr(module, "_batchgen_parameter_shapes"):
+			return
 		std = self.config.initializer_range
 		if isinstance(module, nn.Linear):
 			module.weight.data.normal_(mean=0.0, std=std)
@@ -4403,7 +4410,7 @@ class DeepseekV3Model(DeepseekV3PreTrainedModel):
 		self.padding_idx = config.pad_token_id
 		self.vocab_size = config.vocab_size
 
-		self.embed_tokens = nn.Embedding(
+		self.embed_tokens = make_embedding(config,
 			config.vocab_size, config.hidden_size, self.padding_idx
 		)
 		self.comm = comm
@@ -4637,7 +4644,7 @@ class DeepseekV3ForCausalLM(DeepseekV3PreTrainedModel):
 		super().__init__(config)
 		self.model = DeepseekV3Model(config, comm)
 		self.vocab_size = config.vocab_size
-		self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+		self.lm_head = make_linear(config, config.hidden_size, config.vocab_size, bias=False)
 
 		# Initialize weights and apply final processing
 		self.post_init()

@@ -5,9 +5,9 @@ This is a campaign convention, NOT the paper's original workload artifact.
 Official LongBench v1 uses ``input``; the repository's dataset card describes a
 ``question`` variant. Select the schema explicitly. Supply local JSONL/parquet
 and a local dataset2prompt.json (task -> template with {context}/{input}). Nothing
-is downloaded, and no model Python code is executed.
+is downloaded. Only local tokenizer wrappers are loaded; model engines are not.
 
-Example (requires transformers, tokenizers; pyarrow only for parquet):
+Example (requires transformers, tokenizers, torch; pyarrow only for parquet):
   python prepare_workload.py --data /data/LongBench --tasks qasper,hotpotqa \
     --input-field input --templates /data/dataset2prompt.json \
     --dataset-revision <source-commit> --tokenizer /models/DeepSeek-R1 \
@@ -32,10 +32,13 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import random
 import string
+import sys
+import types
 from typing import Any
 
 
@@ -56,6 +59,82 @@ def canonical(value: Any) -> str:
 
 def ids_digest(ids: list[int]) -> str:
     return hashlib.sha256(canonical(ids).encode()).hexdigest()
+
+
+def load_service_tokenizer(tokenizer_json: Path):
+    """Instantiate the real DeepSeek service class without importing engines.
+
+    Load the actual BaseTokenizer/FastTokenizer/DeepSeekV3Tokenizer source. Only
+    the registration decorator is inert: normal registry startup imports all
+    model families and native kernels, unnecessary for an offline tokenizer audit.
+    Restore sys.modules afterwards so this helper cannot alter another runtime.
+    """
+    root = Path(__file__).resolve().parents[2]
+    if tokenizer_json.name != "tokenizer.json" or not (tokenizer_json.parent / "tokenizer_config.json").is_file():
+        raise ValueError("Service tokenizer needs adjacent tokenizer.json and tokenizer_config.json")
+    sources = {
+        "batchgen.config.base_tokenizer": root / "batchgen/config/base_tokenizer.py",
+        "batchgen.config.fast_tokenizer": root / "batchgen/config/fast_tokenizer.py",
+        "_r1_audit_deepseek_tokenizer": root / "batchgen/models/deepseek/deepseekv3/tokenizer.py",
+    }
+    names = ["batchgen", "batchgen.config", "batchgen.config.tokenizer_registry", *sources]
+    saved = {name: sys.modules.get(name) for name in names}
+    try:
+        for name, directory in (("batchgen", root / "batchgen"), ("batchgen.config", root / "batchgen/config")):
+            package = types.ModuleType(name)
+            package.__path__ = [str(directory)]
+            sys.modules[name] = package
+        registry = types.ModuleType("batchgen.config.tokenizer_registry")
+
+        def register(kind):
+            if kind != "deepseek_v3":
+                raise ValueError(f"Unexpected service tokenizer family: {kind}")
+            return lambda cls: cls
+
+        registry.register_tokenizer = register
+        sys.modules[registry.__name__] = registry
+        module = None
+        for name, source in sources.items():
+            spec = importlib.util.spec_from_file_location(name, source)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[name] = module
+            spec.loader.exec_module(module)
+        # The flag selects an actual deployed bundle directory. It never
+        # substitutes a raw tokenizer for the model's production wrapper.
+        module.TOKENIZER_DIR = tokenizer_json.resolve().parent
+        service = module.DeepSeekV3Tokenizer()
+    finally:
+        for name, old in saved.items():
+            if old is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = old
+    provenance = {
+        "class": "DeepSeekV3Tokenizer",
+        "source_sha256": {str(path.relative_to(root)): digest(path) for path in sources.values()},
+        "assets": {name: digest(tokenizer_json.parent / name) for name in ("tokenizer.json", "tokenizer_config.json")},
+        "add_bos_token": service.add_bos_token, "add_eos_token": service.add_eos_token,
+        "comparison_paths": ["encode(add_special_tokens=True)", "worker-style unpadded batch encoding"],
+    }
+    return service, provenance
+
+
+def tokenizer_file_pins(files: list[Path], manifest_path: Path):
+    """Record independently versioned assets, rather than calling all weights' revision theirs."""
+    entries = {item["Path"]: item for item in json.loads(manifest_path.read_text(encoding="utf-8"))}
+    pins = {}
+    for path in files:
+        if path.name not in entries:
+            pins[path.name] = {"sha256": digest(path), "revision": None}
+            continue
+        entry = entries[path.name]
+        if digest(path) != entry["Sha256"] or path.stat().st_size != entry["Size"]:
+            raise ValueError(f"Tokenizer asset does not match pinned file manifest: {path.name}")
+        pins[path.name] = {"sha256": entry["Sha256"], "revision": entry["Revision"]}
+    for name in ("tokenizer.json", "tokenizer_config.json"):
+        if name not in pins or pins[name]["revision"] is None:
+            raise ValueError(f"Pinned manifest lacks required tokenizer asset: {name}")
+    return pins
 
 
 def iter_rows(path: Path):
@@ -166,7 +245,10 @@ def main() -> None:
     parser.add_argument("--templates", required=True, type=Path, help="Local task-to-prompt-template JSON; use {input} even for question schema")
     parser.add_argument("--dataset-revision", required=True, help="Data source commit/version; also file-hashed below")
     parser.add_argument("--tokenizer", required=True, type=Path, help="Local pinned R1 tokenizer directory")
-    parser.add_argument("--tokenizer-revision", required=True, help="Recorded checkpoint/tokenizer revision")
+    parser.add_argument("--tokenizer-revision", required=True, help="Operator's snapshot label; verified per-file revisions below are authoritative")
+    parser.add_argument("--tokenizer-file-manifest", type=Path,
+                        default=Path(__file__).resolve().with_name("r1_model_manifest.json"),
+                        help="Pinned file manifest; tokenizer.json/config may have different revisions")
     parser.add_argument("--batchgen-tokenizer-json", type=Path,
                         default=Path(__file__).resolve().parents[2] / "batchgen/models/deepseek/deepseekv3/tokenizer.json",
                         help="Actual BatchGen bundled tokenizer, which is loaded independently of model weights")
@@ -183,18 +265,17 @@ def main() -> None:
     if args.output.exists():
         parser.error("--output already exists; use a new directory")
     from transformers import AutoTokenizer, __version__ as transformers_version
-    from tokenizers import Tokenizer, __version__ as tokenizers_version
+    from tokenizers import __version__ as tokenizers_version
 
     tokenizer = AutoTokenizer.from_pretrained(str(args.tokenizer), local_files_only=True, trust_remote_code=False)
-    native = Tokenizer.from_file(str(args.batchgen_tokenizer_json))
-    native.no_padding()
-    native.no_truncation()
+    service_tokenizer, service_provenance = load_service_tokenizer(args.batchgen_tokenizer_json)
     tokenizer_files = sorted(path for path in args.tokenizer.iterdir() if path.is_file() and (
         path.name.startswith(("tokenizer", "special_tokens", "added_tokens", "chat_template"))
         or path.suffix in {".model", ".jinja"}
     ))
     if not tokenizer_files:
         raise ValueError("No tokenizer assets found")
+    file_pins = tokenizer_file_pins(tokenizer_files, args.tokenizer_file_manifest)
     templates = json.loads(args.templates.read_text(encoding="utf-8"))
     tasks = sorted(set(part.strip() for part in args.tasks.split(",") if part.strip()))
     if not tasks:
@@ -242,8 +323,11 @@ def main() -> None:
                     excluded[f"{input_length}:{reason}"] += 1
                     break
                 prompt, ids, _, _ = result
-                if native.encode(prompt, add_special_tokens=True).ids != ids:
-                    raise ValueError(f"Native BatchGen/HF tokenizer disagreement for {key}; do not benchmark")
+                single_ids = service_tokenizer.encode(prompt, add_special_tokens=True)
+                worker_ids = service_tokenizer([prompt], return_tensors=None, padding=False,
+                                               truncation=False, return_attention_mask=False)["input_ids"][0]
+                if single_ids != ids or worker_ids != ids:
+                    raise ValueError(f"Actual BatchGen service/HF tokenizer disagreement for {key}; do not benchmark")
                 fitted.append(result)
             if len(fitted) != len(PROFILES):
                 continue
@@ -297,6 +381,10 @@ def main() -> None:
         "tasks": tasks, "schema_input_field": args.input_field,
         "templates_sha256": digest(args.templates), "tokenizer_revision": args.tokenizer_revision,
         "tokenizer_files": {path.name: digest(path) for path in tokenizer_files},
+        "tokenizer_file_pins": file_pins,
+        "tokenizer_file_manifest_sha256": digest(args.tokenizer_file_manifest),
+        "tokenizer_revision_semantics": "Operator snapshot label only; verified per-file revisions are authoritative",
+        "batchgen_service_tokenizer": service_provenance,
         "batchgen_tokenizer_json": {"path": str(args.batchgen_tokenizer_json.resolve()),
                                      "sha256": digest(args.batchgen_tokenizer_json)},
         "libraries": {"transformers": transformers_version, "tokenizers": tokenizers_version},
@@ -315,7 +403,7 @@ def main() -> None:
             "Context is middle-truncated; answer evidence may be removed. Retained references support paired quality checks only.",
             "Source dataset length is words/characters, not model token count; measured tokens are recorded separately.",
             "Use the same pinned tokenizer files and completion bodies on both servers; assert actual usage.prompt_tokens equals input_tokens before timing.",
-            "Native tokenizer/HF agreement is an offline check; server launch overrides or prompt rewriting still require runtime verification.",
+            "Actual service encode and worker-style batch encoding match HF offline; runtime overrides or prompt rewriting still require runtime verification.",
             "Output lengths are maxima by default; fixed-length claims require both engines to actually produce the requested length.",
             "Disable prefix reuse on both engines, especially if samples are repeated.",
         ],

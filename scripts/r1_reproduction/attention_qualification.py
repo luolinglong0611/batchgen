@@ -135,6 +135,11 @@ def run_prefill(args, device, scale, reports, metadata):
         max_seqlen_q=max(lengths), max_seqlen_k=max(lengths),
         softmax_scale=scale, causal=True,
     )
+    # FA4 b36 returns (output, optional_lse), even with return_lse=False.
+    if isinstance(actual, tuple):
+        if len(actual) != 2 or not isinstance(actual[0], torch.Tensor):
+            raise TypeError('Unexpected FA4 return contract')
+        actual = actual[0]
     torch.cuda.synchronize(device)
     reference = prefill_reference(q, k, v, boundaries, scale)
     check(actual, reference, {

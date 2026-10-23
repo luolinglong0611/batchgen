@@ -2,6 +2,7 @@ from .modeling_deepseek_v3 import (
 	DeepseekV3ForCausalLM
 )
 from .wrappers import DeepSeekExpertWrapper, DeepSeekAttnWrapper as Attn_Wrapper
+from .skeleton import capture_parameter_shapes, expected_parameter_shape, validate_parameter_residency
 import logging
 from batchgen.quantization.fp8e4m3 import deepseek_v3_dequantization
 import types
@@ -29,6 +30,8 @@ class DeepseekV3ParallelStrategyManager:
 		world_size
 	):
 		self.loaded_model_config = loaded_model_config
+		# This manager always replaces large parameters from shared FP8 weights.
+		self.loaded_model_config.batchgen_skeleton = True
 		self.engine_config = engine_config
 		self.model_config = model_config
 		self.core_engine = core_engine
@@ -142,6 +145,7 @@ class DeepseekV3ParallelStrategyManager:
 		# Step 2: Initialize model
 		step_start = time.perf_counter()
 		self.model = DeepseekV3ForCausalLM(self.loaded_model_config)
+		capture_parameter_shapes(self.model)
 		timings['model_init'] = time.perf_counter() - step_start
 
 		# Step 3: Initialize data structures
@@ -225,6 +229,7 @@ class DeepseekV3ParallelStrategyManager:
 		step_start = time.perf_counter()
 		self._load_model_skeleton()
 		timings['skeleton'] = time.perf_counter() - step_start
+		self._validate_loaded_parameters()
 
 		# Step 7: Config attention module
 		step_start = time.perf_counter()
@@ -317,6 +322,7 @@ class DeepseekV3ParallelStrategyManager:
 
 		# Always use comm for NCCL collectives
 		self.model = DeepseekV3ForCausalLM(self.loaded_model_config, comm)
+		capture_parameter_shapes(self.model)
 
 		self.weight_copy_task = {}
 		self.state_dict_name_map = {}
@@ -453,6 +459,7 @@ class DeepseekV3ParallelStrategyManager:
 		# These are persistent on GPU, but need explicit loading
 		self._load_attn_module()
 		self._load_shared_expert_module()
+		self._validate_loaded_parameters()
 		self._config_attn_module()
 		self._config_expert_module()
 		self._config_lm_head_hook()
@@ -741,9 +748,18 @@ class DeepseekV3ParallelStrategyManager:
 		- Configure the wrapper.
 		"""
 		start_time = time.perf_counter()
+		from .kernel_dispatch import select_sm103_experiment, bind_sm103_attention
+		sm103_experiment = select_sm103_experiment(self.engine_config.Basic_Config.device_torch)
+		if sm103_experiment:
+			logging.warning(
+				"R1 SM103 experimental attention dispatch enabled explicitly; "
+				"full-layer/model qualification and runtime preflight are still required"
+			)
 		for layer_idx in range(len(self.model.model.layers)):
 			attn_module = self.model.model.layers[layer_idx].self_attn
-			if self.engine_config.Basic_Config.gpu_arch in ("hopper", "blackwell"):
+			if sm103_experiment:
+				bind_sm103_attention(attn_module)
+			elif self.engine_config.Basic_Config.gpu_arch in ("hopper", "blackwell"):
 				from ....attention.mla.fa3_backend import (
 					mla_prefill_flashattention3,
 					mla_prefill_flashattention3_w8a16_deepgemm,
@@ -926,9 +942,30 @@ class DeepseekV3ParallelStrategyManager:
 			# del tensors
 		logging.debug(f"Local routed experts loaded")
 
+	def _validate_loaded_parameters(self):
+		"""Only streamed modules and another rank's experts may stay empty."""
+		streamed = {key for tasks in self.weight_copy_task.values() for key in tasks}
+		allowed = set()
+		for name, mapping in self.state_dict_name_map.items():
+			module_key = mapping["module_key"]
+			if module_key in streamed:
+				allowed.add(name)
+			elif self.loaded_model_config.phase == "decode" and module_key.startswith("routed_expert_"):
+				expert_idx = int(module_key.rsplit("_", 1)[1])
+				experts_per_rank = 256 // self.world_size
+				if not self.global_rank * experts_per_rank <= expert_idx < (self.global_rank + 1) * experts_per_rank:
+					allowed.add(name)
+		validate_parameter_residency(self.model, allowed)
+
 	def _load_model_skeleton(self):
 		for key, param in self.model.named_parameters():
+			if key not in self.skeleton_state_dict:
+				if key not in self.state_dict_name_map:
+					raise RuntimeError(f"Missing skeleton weight: {key}")
+				continue
 			if key in self.skeleton_state_dict:
+				if tuple(self.skeleton_state_dict[key].shape) != expected_parameter_shape(self.model, key):
+					raise RuntimeError(f"Skeleton weight shape mismatch: {key}")
 				dequant_key = key + "_scale_inv"
 				if dequant_key in self.dequant_scale:
 					param.data = deepseek_v3_dequantization(
@@ -1113,6 +1150,11 @@ class DeepseekV3ParallelStrategyManager:
 						)
 
 			for expert_idx in range(len(layer.mlp.experts)):
+				experts_per_rank = 256 // self.world_size
+				nonlocal_expert = (
+					self.loaded_model_config.phase == "decode"
+					and not self.global_rank * experts_per_rank <= expert_idx < (self.global_rank + 1) * experts_per_rank
+				)
 				# Routed expert: persistent if NOT in weight_copy_task
 				if (
 					"routed_expert_" + str(layer_idx) + "_" + str(expert_idx)
@@ -1153,7 +1195,8 @@ class DeepseekV3ParallelStrategyManager:
 					persistent,
 					weight_dequant_scales,
 				)
-				if persistent:
+				layer.mlp.experts[expert_idx]._batchgen_nonlocal_expert = nonlocal_expert
+				if persistent and not nonlocal_expert:
 					# Persistent expert: register FP8 weights for direct GPU access
 					layer.mlp.experts[expert_idx]._register_fp8_weights()
 					for key, value in layer.mlp.experts[expert_idx].weight_dequant_scale.items():

@@ -1,9 +1,13 @@
-"""Experimental R1 SM103 MLA backend; NOT yet GPU-qualified or dispatched.
+"""Experimental R1 SM103 MLA backend; full-layer qualification is required.
 
 Candidate dependencies: flash-attn-4[cu13]==4.0.0b36,
 flashinfer-python[cu13]==0.6.13 and flashinfer-cubin==0.6.13, plus the repository's
-DeepGEMM and batchgen_kernels. Run attention_qualification.py first, then a
+Triton blockscale GEMM and batchgen_kernels. Run attention_qualification.py first, then a
 complete-layer prefill/append/decode comparison before enabling this module.
+The independent precision candidate is selected only by setting the layer's
+_r1_attention_implementation to "triton_precision"; the default remains
+"fa4_flashinfer". The precision path imports neither FA4 nor FlashInfer.
+All candidates require DISABLE_MMA_V5=1 before launch for SM103 Triton W8A8.
 
 This initial implementation is eager-only, with deliberately synchronous input
 checks. It is not ready for throughput comparisons or CUDA graph capture.
@@ -33,7 +37,21 @@ _R1_DIMS = {
 _WORKSPACE_BYTES = 128 * 1024**2
 
 
+def _check_compiler_environment():
+    if os.environ.get("DISABLE_MMA_V5") != "1":
+        raise RuntimeError("Set DISABLE_MMA_V5=1 before the process starts: SM103 W8A8 requires the MMA v3 path")
+
+
+def _attention_implementation(module):
+    implementation = getattr(module, "_r1_attention_implementation", "fa4_flashinfer")
+    if implementation not in ("fa4_flashinfer", "triton_precision"):
+        raise ValueError(f"Unknown R1 attention implementation: {implementation}")
+    return implementation
+
+
 def _check_module(module, hidden_states):
+    _check_compiler_environment()
+    _attention_implementation(module)
     for name, expected in _R1_DIMS.items():
         if getattr(module, name, None) != expected:
             raise ValueError(f"R1 SM103 requires {name}={expected}")
@@ -58,14 +76,21 @@ def _quantize(x):
 
 
 def w8a16_gemm(weight_data_fp8, weight_scale_inv_fp32, activation_bf16):
-    """Match the default prefill FP8 activation/weight GEMM, independent of FA3."""
-    import deep_gemm
+    """Preserve original FP32 block scales using the portable Triton FP8 GEMM.
+
+    DeepGEMM fa3a5ca's SM10 path requires power-of-two UE8M0 scales, while
+    original R1 checkpoint scales and BatchGen activation scales are general
+    FP32. Packing them as UE8M0 either asserts or changes their values. This
+    migration path retains original weights/scales and FP8 activations instead
+    of silently requantizing the model. It is not the paper's DeepGEMM backend.
+    """
+    _check_compiler_environment()
+    from batchgen.gemm.w8a8 import w8a8_gemm
 
     if activation_bf16.ndim not in (2, 3):
         raise ValueError("Expected a 2D or 3D activation")
     x = activation_bf16.reshape(-1, activation_bf16.shape[-1])
-    out = torch.empty((x.shape[0], weight_data_fp8.shape[0]), dtype=torch.bfloat16, device=x.device)
-    deep_gemm.fp8_gemm_nt(_quantize(x), (weight_data_fp8, weight_scale_inv_fp32), out)
+    out = w8a8_gemm(*_quantize(x), weight_data_fp8, weight_scale_inv_fp32)
     return out.view(*activation_bf16.shape[:-1], out.shape[-1])
 
 
@@ -74,10 +99,9 @@ def _project_prefill(module, name, x, scales):
 
 
 def _project_decode(module, name, quantized, scales):
-    from batchgen.gemm.w8a8_deepgemm import w8a8_deepgemm
+    from batchgen.gemm.w8a8 import w8a8_gemm
 
-    # Preserve the existing decoder's DeepGEMM options and numerical path.
-    return w8a8_deepgemm(*quantized, getattr(module, name).weight, scales[f"{name}.weight_scale_inv"])
+    return w8a8_gemm(*quantized, getattr(module, name).weight, scales[f"{name}.weight_scale_inv"])
 
 
 def _validate_full_prefill_layout(boundaries, positions, tokens, sequences, max_seqlen):
@@ -92,6 +116,44 @@ def _validate_full_prefill_layout(boundaries, positions, tokens, sequences, max_
     for start, end in zip(boundaries, boundaries[1:]):
         if positions[start:end] != list(range(end - start)):
             raise ValueError("Only full prefill with positions reset to zero per sequence is supported")
+
+
+def _attend_prefill(module, queries, keys, values, cu_seqlens, max_seqlen):
+    if _attention_implementation(module) == "triton_precision":
+        from .triton_precision import varlen_prefill
+
+        return varlen_prefill(queries, keys, values, cu_seqlens, max_seqlen,
+                              softmax_scale=module.softmax_scale)
+    from flash_attn.cute import flash_attn_varlen_func
+
+    # FA4's fourth positional argument is qv, NOT cu_seqlens_q.
+    output = flash_attn_varlen_func(
+        queries, keys, values,
+        cu_seqlens_q=cu_seqlens, cu_seqlens_k=cu_seqlens,
+        max_seqlen_q=max_seqlen, max_seqlen_k=max_seqlen,
+        softmax_scale=module.softmax_scale, causal=True,
+    )
+    # FA4 b36 returns (output, lse), including when return_lse=False.
+    if not isinstance(output, tuple) or len(output) != 2:
+        raise RuntimeError("Expected FA4 b36's (output, lse) return contract")
+    return output[0]
+
+
+def _attend_decode(module, query, cache, table, lengths, max_seqlen):
+    if _attention_implementation(module) == "triton_precision":
+        from .triton_precision import paged_mla_decode
+
+        return paged_mla_decode(query.squeeze(1), cache, table, lengths,
+                                softmax_scale=module.softmax_scale).unsqueeze(1)
+    from flashinfer.mla import trtllm_batch_decode_with_kv_cache_mla
+
+    return trtllm_batch_decode_with_kv_cache_mla(
+        query=query, kv_cache=cache.squeeze(2), workspace_buffer=_decode_workspace(module, query.device),
+        qk_nope_head_dim=128, kv_lora_rank=512, qk_rope_head_dim=64,
+        block_tables=table, seq_lens=lengths, max_seq_len=max_seqlen,
+        sparse_mla_top_k=0, bmm1_scale=module.softmax_scale, bmm2_scale=1.0,
+        backend="trtllm-gen",
+    )
 
 
 @torch.inference_mode()
@@ -112,7 +174,6 @@ def mla_prefill_sm103_w8a16_prepacked(
     if num_sequences == 1 and hidden_states.shape[0] > 262_144 and getattr(self, "single_sequence_prefill_chunk_size", 0):
         raise NotImplementedError("Chunked single-sequence prefill needs a separate FA4 integration")
 
-    from flash_attn.cute import flash_attn_varlen_func
     from batchgen.attention.mla.rotary_embedding import rotary_pos_emb_interleaved_native
 
     tokens = hidden_states.shape[0]
@@ -131,15 +192,9 @@ def mla_prefill_sm103_w8a16_prepacked(
     k_nope, values = expanded.split((128, 128), dim=-1)
     queries = torch.cat((q_nope, q_pe), dim=-1).contiguous()
     keys = torch.cat((k_nope, k_pe.expand(-1, 128, -1)), dim=-1).contiguous()
-    # FA4's fourth positional argument is qv, NOT cu_seqlens_q.
-    output = flash_attn_varlen_func(
-        queries, keys, values.contiguous(),
-        cu_seqlens_q=cu_seqlens, cu_seqlens_k=cu_seqlens,
-        max_seqlen_q=max_seqlen, max_seqlen_k=max_seqlen,
-        softmax_scale=self.softmax_scale, causal=True,
-    )
+    output = _attend_prefill(self, queries, keys, values.contiguous(), cu_seqlens, max_seqlen)
     if not isinstance(output, torch.Tensor) or output.shape != (tokens, 128, 128) or output.dtype != torch.bfloat16:
-        raise RuntimeError("FA4 returned an unexpected R1 attention tensor")
+        raise RuntimeError("Selected kernel returned an unexpected R1 attention tensor")
     return _project_prefill(self, "o_proj", output.reshape(tokens, 128 * 128), weight_scale), offload_kv
 
 
@@ -228,9 +283,8 @@ def mla_decoding_sm103_bf16_with_pagekv(
     if max_seqlen < int(cache_seqlens.max()):
         raise ValueError("max_seqlen is smaller than a sequence length")
 
-    from flashinfer.mla import trtllm_batch_decode_with_kv_cache_mla
     from batchgen_kernels.triton.fp8_quantize import deepseek_v3_dequantization
-    from batchgen_kernels.triton.fused_rmsnorm_rope import fused_rmsnorm_rope_with_q_native
+    from batchgen.attention.mla.rotary_embedding import rotary_pos_emb_interleaved_native
 
     cache, _, table = gpu_paged_kv_manager.get_layer_kv_with_page_table(layer_idx=layer_idx)
     if batch_slice is not None:
@@ -248,10 +302,15 @@ def mla_decoding_sm103_bf16_with_pagekv(
     cos, sin = self.rotary_emb(q_pe, seq_len=max_seqlen)
     if cos.shape[0] < max_seqlen or sin.shape != cos.shape:
         raise ValueError("RoPE cache does not cover the requested sequence length")
-    offload_kv = fused_rmsnorm_rope_with_q_native(
-        new_kv, q_pe, cos, sin, q_position_ids, self.kv_a_layernorm.weight,
-        512, 64, eps=self.kv_a_layernorm.variance_epsilon,
-    )
+    # Use the same FP32 rotation boundary as prefill. The legacy fused kernel
+    # performs BF16 products before addition when its cos/sin cache is BF16;
+    # that is a different rounding contract and changes the appended cache.
+    q_pe = rotary_pos_emb_interleaved_native(q_pe, cos, sin, q_position_ids, 1)
+    latent = self.kv_a_layernorm(new_kv[..., :512])
+    k_pe = rotary_pos_emb_interleaved_native(
+        new_kv[..., 512:].unsqueeze(1), cos, sin, q_position_ids, 1,
+    ).squeeze(1)
+    offload_kv = torch.cat((latent, k_pe), dim=-1)
     k_tensor = offload_kv.view(batch, 1, 1, 576)
     gpu_paged_kv_manager.update_layer_decode_new_token(
         k_tensor=k_tensor, v_tensor=None,
@@ -265,15 +324,9 @@ def mla_decoding_sm103_bf16_with_pagekv(
     ).view(128, 256, 512)
     latent_query = torch.einsum("bhd,hdc->bhc", q_nope.squeeze(2), absorb[:, :128])
     query = torch.cat((latent_query, q_pe.squeeze(2)), dim=-1).unsqueeze(1).contiguous()
-    attn_out = trtllm_batch_decode_with_kv_cache_mla(
-        query=query, kv_cache=cache.squeeze(2), workspace_buffer=_decode_workspace(self, device),
-        qk_nope_head_dim=128, kv_lora_rank=512, qk_rope_head_dim=64,
-        block_tables=table, seq_lens=cache_seqlens.contiguous(), max_seq_len=max_seqlen,
-        sparse_mla_top_k=0, bmm1_scale=self.softmax_scale, bmm2_scale=1.0,
-        backend="trtllm-gen",
-    )
+    attn_out = _attend_decode(self, query, cache, table, cache_seqlens.contiguous(), max_seqlen)
     if attn_out.shape != (batch, 1, 128, 512) or attn_out.dtype != torch.bfloat16:
-        raise RuntimeError("FlashInfer returned an unexpected R1 latent attention tensor")
+        raise RuntimeError("Selected kernel returned an unexpected R1 latent attention tensor")
     output = torch.einsum("bqhc,hdc->bqhd", attn_out, absorb[:, 128:]).reshape(batch, 128 * 128)
     output = _project_decode(self, "o_proj", _quantize(output), weight_scale)
     return output.view(batch, 1, -1), k_tensor

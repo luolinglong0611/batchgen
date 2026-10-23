@@ -7,6 +7,7 @@ minimal named-parameter fixture because no attention execution is involved.
 
 import ast
 import gc
+import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,6 +19,9 @@ from torch import nn
 ROOT = Path(__file__).resolve().parents[1]
 SERVER = ROOT / "batchgen/models/deepseek/deepseek_parameter_server.py"
 MODEL = ROOT / "batchgen/models/deepseek/deepseekv3/modeling_deepseek_v3.py"
+_SPEC = importlib.util.spec_from_file_location("r1_metadata_skeleton", MODEL.with_name("skeleton.py"))
+_SKELETON = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(_SKELETON)
 
 
 def _method(path, class_name, method_name):
@@ -34,7 +38,8 @@ def _small_model(config):
     cls = ast.ClassDef(name="DeepseekV3MLP", bases=[ast.Attribute(
         value=ast.Name(id="nn", ctx=ast.Load()), attr="Module", ctx=ast.Load())],
         keywords=[], body=[init], decorator_list=[])
-    namespace = {"nn": nn, "ACT2FN": {"silu": torch.nn.functional.silu}}
+    namespace = {"nn": nn, "ACT2FN": {"silu": torch.nn.functional.silu},
+                 "make_linear": _SKELETON.make_linear}
     exec(compile(ast.fix_missing_locations(ast.Module(
         body=[cls], type_ignores=[])), str(MODEL), "exec"), namespace)
     mlp = namespace["DeepseekV3MLP"]

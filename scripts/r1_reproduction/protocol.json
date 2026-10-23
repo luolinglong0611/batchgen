@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "status": "r1_resumed_weights_staging_sm103_attention_port_required",
+  "status": "r1_native_runtime_built_weights_downloading_numerical_qualification_in_progress",
   "model": "deepseek-ai/DeepSeek-R1",
-  "model_revision": null,
+  "model_revision": "20f2865710d161dc4a32c4e8c3d7c42c7b9852f8",
   "paper_reference": {
     "url": "https://www.usenix.org/system/files/osdi26-xu-tairan.pdf",
     "section": "6.1 / Table 3",
@@ -37,7 +37,15 @@
     "type": "hardware_port_and_methodology_reproduction",
     "weight_precision": "checkpoint FP8",
     "kv_precision_initial": "BF16",
-    "runtime_versions": null,
+    "runtime_versions": {
+      "python": "3.11.15",
+      "torch": "2.9.0+cu130",
+      "triton": "3.5.0",
+      "nccl": "2.27.7",
+      "private_cuda_toolkit": "13.0.88",
+      "batchgen_kernels": "0.5.0+sm100",
+      "libucx-cu13": "1.22.0"
+    },
     "dataset_manifest_sha256": null,
     "formal_request_count": null,
     "formal_request_count_note": "Resolve 6K as 6000 or 6144 from original artifacts; document explicitly if unavailable",
@@ -109,7 +117,7 @@
       "triton_commit": "4caa0328bf8df64896dd5f6fb9df41b0eb2e750a",
       "cute_dsl": "4.3.0.dev0",
       "source": "https://github.com/sgl-project/sglang/blob/v0.5.5.post3/docker/Dockerfile",
-      "qualification": "source-audited CUDA13/SM103 route, not yet installed or tested; isolated from BatchGen environment"
+      "qualification": "installer running in isolated node0 environment; import and full-model correctness untested"
     },
     "baseline_launch_candidate": [
       "--dtype",
@@ -172,7 +180,7 @@
     "batchgen_r1_host_weight_reservation_gib_per_node": 675,
     "model_weights_verified": false,
     "communication_verified": true,
-    "qualification_runtime_note": "Base runtime is for hardware qualification only; target BatchGen and baseline environments remain to be pinned",
+    "qualification_runtime_note": "Target Torch2.9+cu130 installed on both nodes; native extension wheel built node0 and hash-verified/installed node1.",
     "communication_scope": "NCCL only: all 16 ranks passed all-reduce, all-gather, ring send/receive; BatchGen UCX/KV transfer untested",
     "base_nccl": "2.28.9",
     "nccl_qualification": {
@@ -213,7 +221,35 @@
     "container_memory_limit_bytes_per_node": 1099511627776,
     "memory_verified_utc": "2026-10-23T06:22:10Z",
     "container_recreated_after_nccl_qualification": true,
-    "nccl_reverified_after_container_rebuild": true
+    "nccl_reverified_after_container_rebuild": true,
+    "target_runtime_nccl_qualification": {
+      "torch": "2.9.0+cu130",
+      "nccl": "2.27.7",
+      "passed_ranks": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15
+      ],
+      "all_reduce": true,
+      "all_gather": true,
+      "ring_send_receive": true,
+      "report_stem": "nccl-torch29",
+      "utc_date": "2026-10-23",
+      "kv_transfer_tested": false
+    }
   },
   "weight_source": {
     "model": "deepseek-ai/DeepSeek-R1",
@@ -227,12 +263,12 @@
     "download_verified": false
   },
   "adaptation_gates": {
-    "python": "isolated Python 3.11; base Python 3.10 is unsupported",
-    "torch": "2.9.0+cu130 required; base 2.11.0 qualification is not model runtime",
-    "cuda_toolkit": "matching CUDA13.0 preferred; system13.2 rejected by current mismatch guard",
-    "prefill": "SM103 FA4 R1 192/128 shape correctness pending",
-    "decode": "pinned FlashMLA BF16 dense unsupported on SM10.x; FlashInfer candidate pending",
-    "moe": "R1 Triton grouped FP8 plus DeepGEMM real-shape correctness pending"
+    "python": "isolated3.11.15 installed both nodes",
+    "torch": "2.9.0+cu130 installed both nodes",
+    "cuda_toolkit": "private13.0.88 built SM103 kernels and core",
+    "prefill": "FA4 failed strict primitive gate; owned IEEE Triton primitive passed; full-layer strict gate still failed",
+    "decode": "FlashInfer failed strict primitive gate and NaN tail padding probe; owned high-precision Triton primitive passed; full-layer and native FP32 RoPE correction under qualification",
+    "moe": "Synthetic actual-shape7168/2048 FP8 GEMM, native256-to8 router, prefill/decode grouped stages passed predeclared MoE gate v1; EP dispatch/communication and real model remain untested"
   },
   "dataset_source": {
     "name": "zai-org/LongBench",
@@ -244,5 +280,20 @@
     "templates_revision": "2e00731f8d0bff23dc4325161044d0ed8af94c1e",
     "templates_sha256": "56d22ad4f382169c2b8a11ff4c982a4a1bea096c8152b0f0b85b64686b157c30",
     "workload_generated": false
+  },
+  "native_loader_qualification": {
+    "status": "passed",
+    "scope": "single verified first shard, actual C++ Parameter_Server O_DIRECT plus tail read, anonymous memfd, all270tensor bytes checked",
+    "bytes": 5234105216,
+    "hugetlbfs": false,
+    "thp": false,
+    "full_model_loaded": false,
+    "gpu_dma_tested": false
+  },
+  "numerical_record_policy": "Preserve failed reports and unchanged original attention gate. High-precision diagnostic candidate is not performance-qualified and does not establish paper speedup.",
+  "cpu_contract_tests": {
+    "passed": 46,
+    "subtests_passed": 9,
+    "report": "cpu-tests-v4.log"
   }
 }

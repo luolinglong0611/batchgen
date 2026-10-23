@@ -31,6 +31,7 @@ import torch.nn as nn
 
 from batchgen.models.wrappers import ExpertWrapperBase, AttnWrapperBase
 from batchgen.quantization.fp8e4m3 import deepseek_v3_dequantization
+from .skeleton import validate_parameter_residency
 
 
 class DeepSeekExpertWrapper(ExpertWrapperBase):
@@ -111,6 +112,7 @@ class DeepSeekExpertWrapper(ExpertWrapperBase):
 
         Called when persistent=True - weights stay in GPU memory.
         """
+        validate_parameter_residency(self.module, set())
         self.fp8_gate = self.module.gate_proj.weight.data
         self.fp8_up = self.module.up_proj.weight.data
         self.fp8_down = self.module.down_proj.weight.data
@@ -149,6 +151,8 @@ class DeepSeekExpertWrapper(ExpertWrapperBase):
         Returns:
             Output tensor [num_tokens, hidden_size]
         """
+        if getattr(self, "_batchgen_nonlocal_expert", False):
+            raise RuntimeError(f"Cannot execute non-local expert {self.module_key}")
         rank = self.get_rank_safe()
         logging.debug(
             f"[Layer {self.layer_idx} Expert {self.expert_idx}] "
@@ -162,6 +166,7 @@ class DeepSeekExpertWrapper(ExpertWrapperBase):
             # Apply weights to module (dequantization happens in deepgemm_forward)
             for name, param in self.module.named_parameters():
                 param.data = weights[name]
+            validate_parameter_residency(self.module, set())
 
         else:
             # Use cached FP8 weights (persistent experts)
@@ -222,6 +227,7 @@ class DeepSeekAttnWrapper(AttnWrapperBase):
 
     def _register_fp8_weights(self):
         """Cache FP8 attention weights for MLA architecture."""
+        validate_parameter_residency(self.module, set())
         self.fp8_q_a_proj = self.module.q_a_proj.weight.data
         self.fp8_q_b_proj = self.module.q_b_proj.weight.data
         self.fp8_kv_a_proj = self.module.kv_a_proj_with_mqa.weight.data

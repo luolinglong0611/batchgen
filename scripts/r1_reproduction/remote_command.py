@@ -12,6 +12,7 @@ import shlex
 import subprocess
 import sys
 import uuid
+import zlib
 
 
 def main():
@@ -38,8 +39,10 @@ def main():
         f"exec(compile({args.script.read_text()!r}, '<r1-remote-script>', 'exec'))\n"
         f"print({end!r}, flush=True)\n"
     )
-    encoded = base64.b64encode(code.encode()).decode()
-    bootstrap = f"import base64;exec(base64.b64decode({encoded!r}))"
+    encoded = base64.b64encode(zlib.compress(code.encode())).decode()
+    bootstrap = f"import base64,zlib;exec(zlib.decompress(base64.b64decode({encoded!r})))"
+    if len(bootstrap.encode()) > 100_000:
+        parser.error('Payload is too large for a single remote command; split the deployment')
     remote = shlex.join(["pouch", "exec", args.container, "python3", "-c", bootstrap])
     argv = [args.wsh, "--transport", "direct", "--auth-profile", "default",
             "--no-auto-auth-refresh", "--idle-timeout", str(args.timeout),
