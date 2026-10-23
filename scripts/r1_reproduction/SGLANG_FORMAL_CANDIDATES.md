@@ -541,5 +541,25 @@ These single-run B observations have43.39% and25.85% higher throughput
 respectively. They support advancing B as a candidate, not a claim of repeated
 steady-state superiority, complete tuning, general quality, or BatchGen speedup.
 The B known-answer regression remains11/12; a separate preregistered48-question,
-two-draw, full-context semantic diagnostic is being prepared. It preserves all
-prior failed gates and cannot retrospectively qualify these performance pilots.
+two-draw, full-context semantic diagnostic has now completed on SG (details in
+LONGER_CHAT_PROBE.md). It preserves all prior failed gates and cannot
+retrospectively qualify these performance pilots.
+
+
+After all four B clients and the CPU payload builder had closed and their raw
+exports were verified, both original B supervisors received identity-bound
+SIGTERM. Their executors completed cleanup with model exit code-9 on each
+node; this was controlled retirement, not normal model exit0. The final audit
+found both original supervisor/service identities absent, no original owned
+session members or compute apps, and all16 GPUs at4 MiB/0% utilization. Closed
+model export hashes are
+`df326f16b99fef995179f4dee9ca78d5a25f288631132c0e5f1af0058b4fb427`
+and `ddedab7c2a9e218cef518381cc5d915d7ff3256f399c8c10a04b09c8ff85aa5a`.
+
+A separate read-only runtime mapping audit identified eight actual scheduler
+processes per replica by their native DP/TP command names. All16 mapped the
+same on-disk NCCL and CUDA runtime library hashes on both nodes. The larger
+same-session process count includes compiler children and is not a rank count.
+The audit hashes backing paths on disk; it does not claim access to otherwise
+inaccessible mapped backing bytes. Analysis SHA256 is
+`a6b1497d01320de4e45fc7bfe3d62f66598211a7dbd867204a56f054c8aa3924`.

@@ -238,7 +238,8 @@ to one of the two replicas. Temperature0.6, top-p0.95, disabled top-k (SG-1,
 BG0), EOS allowed and cap8192 are frozen. SG seeds are20261024/20261025;
 BG has no matching request-seed interface, so identical RNG streams are not
 claimed. No extra warmup or retries are included. Native-ID/log-probability
-coverage is measured separately from HTTP success. Its result is pending.
+coverage is measured separately from HTTP success. All96 requests subsequently
+closed with natural stops and complete finite native-ID/logprob evidence.
 
 The all48-question denominator, two-draw question means and task-macro
 token-F1 are fixed in advance. Missing, failed, empty, nonfinite, repetitive,
@@ -250,3 +251,36 @@ unchanged. Preexecution scoring-supplement SHA256 is
 `0aac067dbcd0b5455ec91458e182e12fa535ac212ecb0db4df31e2e8304d49be`.
 BG requires a separate native-trace-enabled quality cohort; performance
 cohorts keep tracing disabled and cannot supply those quality trace records.
+
+
+The completed SG-only diagnostic has task-macro token-F1 0.6375035841190543
+and exact match 0.4479166666666667. All96 outputs were extractable under the
+predeclared rule; no missing/empty/nonfinite/capped/native-tail-repetition
+failure was observed. These are descriptive scores on this selected48-question
+set, not a general quality pass or comparison with BatchGen. BG has no result
+for this protocol yet. The original known-answer12 and numerical failures
+remain unchanged.
+
+| Task (8 questions, 2 draws each) | Exact match | Token-F1 |
+| --- | ---: | ---: |
+| Qasper |0.2500|0.3898|
+| MultiFieldQA-en |0.1875|0.6718|
+| HotpotQA |0.6250|0.8030|
+| 2WikiMQA |0.7500|0.8750|
+| MuSiQue |0.5000|0.6326|
+| NarrativeQA |0.3750|0.4528|
+
+Original client run SHA256 is
+`89138dcf0074e4b00a68e09b7c2a7fb7b341fada815e37bd23cf0fec0ae09f6f`;
+final guard SHA256 is
+`809531fa8f6cffde8f1dd10109384b854a5c35da2f43f7cb7ba45c01e93e8337`.
+The guard/client exited0 without signals or outstanding requests; all323 raw
+files were exported with before/after original CPU identity absence checks.
+Closed envelope SHA256 is
+`62d978868b495ac48457aab29628b196101607be7dbe70e8d5c33fc8c6f7ee6e`.
+The scorer source was reviewed independently against the preexecution rules,
+passed eight synthetic CPU checks, and retained the original QA arithmetic.
+Its SHA256 is
+`de5d611d16adf88fa8293bb23e13b65db91bdb845f28e1ce2898f79a60bde356`;
+the actual SG-score SHA256 is
+`d06dc70e4dccd87a56c23ef63fa80d568407a064d1cf6b18fc313a955a975a7a`.
