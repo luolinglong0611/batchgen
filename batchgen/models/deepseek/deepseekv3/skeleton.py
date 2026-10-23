@@ -13,9 +13,20 @@ def _make_module(config, factory, *args, **kwargs):
     if not getattr(config, "batchgen_skeleton", False):
         return factory(*args, **kwargs)
     module = factory(*args, **kwargs, device="meta")
+    # The worker's config_torch_module_initializer replaces direct parameter
+    # storage with one BF16 element, even for meta construction. Constructor
+    # dimensions remain intact, so use the module contract rather than that
+    # deliberately shortened storage to record the real checkpoint shapes.
+    if isinstance(module, nn.Linear):
+        shapes = {"weight": (module.out_features, module.in_features),
+                  "bias": (module.out_features,)}
+    elif isinstance(module, nn.Embedding):
+        shapes = {"weight": (module.num_embeddings, module.embedding_dim)}
+    else:
+        raise TypeError("Serving skeleton supports only Linear and Embedding")
     module._batchgen_parameter_shapes = {}
     for name, parameter in list(module.named_parameters(recurse=False)):
-        module._batchgen_parameter_shapes[name] = tuple(parameter.shape)
+        module._batchgen_parameter_shapes[name] = shapes[name]
         module.register_parameter(name, nn.Parameter(
             torch.empty(0, dtype=parameter.dtype, device="cpu"),
             requires_grad=parameter.requires_grad,

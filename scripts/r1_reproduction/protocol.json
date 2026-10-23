@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "full_weight_loading_and_worker_startup_passed_short_generation_pending",
+  "status": "full_weights_loaded_first_request_blocked_by_worker_skeleton_shape",
   "model": "deepseek-ai/DeepSeek-R1",
   "model_revision": "20f2865710d161dc4a32c4e8c3d7c42c7b9852f8",
   "paper_reference": {
@@ -184,7 +184,7 @@
     },
     "correctness_status": {
       "formal_performance_released": false,
-      "full_model_loaded": false,
+      "full_model_loaded": true,
       "attention_layer_matrix": {
         "layers": [
           0,
@@ -503,7 +503,7 @@
     "forward_executed": false,
     "performance_benchmark_executed": false,
     "speedup_established": false,
-    "status": "v3 full163shard native weight loading and675GiB x8 worker registration completed on both nodes; HTTPhealthy16workers; core first-init and forward pending",
+    "status": "v3 native weights and16workers startup succeeded; worker restart epoch1/generation2 succeeded; first actual request failed in configure_prefill skeleton shape validation beforeforward",
     "prior_failures": [
       {
         "run_id": "r1-diagnostic-v1",
@@ -514,6 +514,13 @@
         "run_id": "r1-diagnostic-v2",
         "phase": "DeepSeek_Parameter_Server.Init native bridge",
         "error": "converted_ckpt_dir passed as pathlib.Path; C++ pybind signature requires str"
+      },
+      {
+        "run_id": "correctness-batchgen-v3",
+        "phase": "configure_prefill._load_model_skeleton",
+        "error": "Global worker initializer replaces Linear/Embedding parameters with shape(1,) before skeleton shape capture; model.embed_tokens.weight mismatch",
+        "batch_id": "batch_fd805c27598e4de49e3eca75",
+        "generated_tokens": 0
       }
     ],
     "successful_startup": {
@@ -528,6 +535,14 @@
         94.15
       ],
       "evidence": "r1-diagnostic-v3.log and worker-restart-v1-before.json on each node; startup success is not generation or benchmark success"
+    },
+    "worker_only_restart": {
+      "epoch": 1,
+      "generation": 2,
+      "nodes": 2,
+      "http_status": 200,
+      "seconds": 186.956,
+      "weight_kv_metadata_skeleton_memfds_preserved": true
     }
   }
 }
