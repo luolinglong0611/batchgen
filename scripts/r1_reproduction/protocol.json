@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "container_qualification_in_progress_no_model_benchmark",
+  "status": "r1_resumed_weights_staging_sm103_attention_port_required",
   "model": "deepseek-ai/DeepSeek-R1",
   "model_revision": null,
   "paper_reference": {
@@ -50,7 +50,7 @@
       512
     ],
     "baseline_topologies": [
-      "sglang_16_gpu_single_instance",
+      "sglang_16_gpu_dp_attention16_tp16_optimized",
       "sglang_two_8_gpu_replicas"
     ],
     "secondary_baseline": "vllm",
@@ -90,7 +90,14 @@
       "KV transfer correctness",
       "baseline tuning",
       "formal benchmark"
-    ]
+    ],
+    "initial_host_kv_cache_gib": 64,
+    "host_memory_note": "675 GiB weights + initial 64 GiB host KV; tune KV upward only after measuring peaks. Original 256 GiB example leaves limited runtime headroom on 1 TiB.",
+    "attention_candidate_versions": {
+      "flash-attn-4": "4.0.0b36, cu13 extra",
+      "flashinfer-python": "0.6.13, cu13 extra",
+      "flashinfer-cubin": "0.6.13"
+    }
   },
   "operational_rules": {
     "remote_execution": "allocated containers only",
@@ -107,7 +114,7 @@
       10,
       3
     ],
-    "visible_host_memory_gib_per_node": 480,
+    "visible_host_memory_gib_per_node": 1024,
     "base_torch": "2.11.0+cu130",
     "base_cuda_runtime": "13.0",
     "batchgen_r1_host_weight_reservation_gib_per_node": 675,
@@ -148,7 +155,31 @@
         14,
         15
       ],
-      "model_performance_result": false
-    }
+      "model_performance_result": false,
+      "reverified_utc_date": "2026-10-23"
+    },
+    "container_memory_limit_bytes_per_node": 1099511627776,
+    "memory_verified_utc": "2026-10-23T06:22:10Z",
+    "container_recreated_after_nccl_qualification": true,
+    "nccl_reverified_after_container_rebuild": true
+  },
+  "weight_source": {
+    "model": "deepseek-ai/DeepSeek-R1",
+    "provider": "ModelScope official namespace",
+    "manifest_sha256": "d9b7aeac6a69ad2f40d885f04bd7c1eaeac766f681e6be374980edf8c504a253",
+    "file_count": 175,
+    "safetensors_count": 163,
+    "total_bytes": 688604361453,
+    "weight_file_revision": "20f2865710d161dc4a32c4e8c3d7c42c7b9852f8",
+    "pinning": "per-file Revision, Size, Sha256 from repository API; metadata files may have distinct revisions",
+    "download_verified": false
+  },
+  "adaptation_gates": {
+    "python": "isolated Python 3.11; base Python 3.10 is unsupported",
+    "torch": "2.9.0+cu130 required; base 2.11.0 qualification is not model runtime",
+    "cuda_toolkit": "matching CUDA13.0 preferred; system13.2 rejected by current mismatch guard",
+    "prefill": "SM103 FA4 R1 192/128 shape correctness pending",
+    "decode": "pinned FlashMLA BF16 dense unsupported on SM10.x; FlashInfer candidate pending",
+    "moe": "R1 Triton grouped FP8 plus DeepGEMM real-shape correctness pending"
   }
 }

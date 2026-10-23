@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""Fetch a pinned ModelScope file manifest into the user's persistent model store.
+
+Uses bounded local staging, verifies size + SHA256 before publishing each file,
+and never executes code from the checkpoint. Run inside an allocated container.
+"""
+import argparse
+import concurrent.futures
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import time
+from urllib.parse import urlencode
+
+
+def digest(path):
+    h = hashlib.sha256()
+    with path.open('rb') as f:
+        for chunk in iter(lambda: f.read(8 * 1024 * 1024), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument('--manifest', type=Path, required=True)
+    ap.add_argument('--destination', type=Path, required=True)
+    ap.add_argument('--staging', type=Path, required=True)
+    ap.add_argument('--workers', type=int, default=4)
+    ap.add_argument('--limit', type=int)
+    ap.add_argument('--exclude-file', action='append', default=[])
+    args = ap.parse_args()
+    if not Path('/.dockerenv').exists():
+        ap.error('Run inside the allocated container')
+    files = json.loads(args.manifest.read_text())
+    files = [f for f in files if f['Type'] == 'blob' and '/' not in f['Path']]
+    for f in files:
+        if Path(f['Path']).name != f['Path'] or f['Path'] in ('.', '..'):
+            ap.error('Unsafe manifest filename')
+        for k, n in [('Sha256', 64), ('Revision', 40)]:
+            if len(f[k]) != n or any(c not in '0123456789abcdef' for c in f[k]):
+                ap.error('Manifest must contain pinned revisions and hashes')
+    if not 1 <= args.workers <= 8:
+        ap.error('workers must be 1..8')
+    # Metadata first; then weights. Bound local scratch space to concurrent files.
+    files.sort(key=lambda f: (f['Path'].endswith('.safetensors'), f['Path']))
+    files = [f for f in files if f['Path'] not in args.exclude_file]
+    if args.limit:
+        files = files[:args.limit]
+    args.destination.mkdir(parents=True, exist_ok=True)
+    args.staging.mkdir(parents=True, exist_ok=True)
+    needed = sum(sorted([f['Size'] for f in files], reverse=True)[:args.workers]) + 20 * 1024**3
+    if shutil.disk_usage(args.staging).free < needed:
+        ap.error('Insufficient local staging capacity')
+    manifest_copy = args.destination / 'download-manifest.json'
+    manifest_copy.write_text(args.manifest.read_text())
+
+    def fetch(f):
+        name = f['Path']
+        dest = args.destination / name
+        receipt = args.destination / (name + '.verified.json')
+        if dest.exists() and receipt.exists():
+            old = json.loads(receipt.read_text())
+            if dest.stat().st_size == f['Size'] and old.get('sha256') == f['Sha256']:
+                print(json.dumps({'event': 'already_verified', 'file': name}), flush=True)
+                return
+        tmp = args.staging / (name + '.partial')
+        url = 'https://modelscope.cn/api/v1/models/deepseek-ai/DeepSeek-R1/repo?' + urlencode({'Revision': f['Revision'], 'FilePath': name})
+        start = time.monotonic()
+        subprocess.run(['curl', '-fL', '--silent', '--show-error', '--connect-timeout', '15', '--max-time', '7200', '--retry', '3', '--retry-delay', '3', '--output', str(tmp), url], check=True, timeout=29000)
+        if tmp.stat().st_size != f['Size'] or digest(tmp) != f['Sha256']:
+            raise RuntimeError('Downloaded file failed verification: ' + name)
+        publishing = args.destination / (name + '.publishing')
+        shutil.copyfile(tmp, publishing)
+        # Read back through FUSE; transient propagation failures are retried.
+        for attempt in range(5):
+            try:
+                if publishing.stat().st_size != f['Size'] or digest(publishing) != f['Sha256']:
+                    raise OSError('Persistent copy hash mismatch')
+                break
+            except OSError:
+                if attempt == 4:
+                    raise
+                time.sleep(2)
+        os.replace(publishing, dest)
+        receipt.write_text(json.dumps({'sha256': f['Sha256'], 'size': f['Size'], 'revision': f['Revision']}))
+        tmp.unlink()
+        print(json.dumps({'event': 'verified', 'file': name, 'bytes': f['Size'], 'seconds': round(time.monotonic()-start, 2)}), flush=True)
+
+    with concurrent.futures.ThreadPoolExecutor(args.workers) as pool:
+        list(pool.map(fetch, files))
+    print(json.dumps({'event': 'complete', 'files': len(files)}), flush=True)
+
+
+if __name__ == '__main__':
+    main()
