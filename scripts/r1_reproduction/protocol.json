@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "full_weights_loaded_first_request_blocked_by_worker_skeleton_shape",
+  "status": "full_model_short_generation_collected_concurrency_and_sglang_pending",
   "model": "deepseek-ai/DeepSeek-R1",
   "model_revision": "20f2865710d161dc4a32c4e8c3d7c42c7b9852f8",
   "paper_reference": {
@@ -500,10 +500,10 @@
   },
   "full_model_reproduction": {
     "weights_loaded": true,
-    "forward_executed": false,
+    "forward_executed": true,
     "performance_benchmark_executed": false,
     "speedup_established": false,
-    "status": "v3 native weights and16workers startup succeeded; worker restart epoch1/generation2 succeeded; first actual request failed in configure_prefill skeleton shape validation beforeforward",
+    "status": "v4 fixed12serial greedy probes completed on generation3/epoch2; all1536tokens returned; no quality/performance pass; concurrency and SGLang pending",
     "prior_failures": [
       {
         "run_id": "r1-diagnostic-v1",
@@ -520,7 +520,8 @@
         "phase": "configure_prefill._load_model_skeleton",
         "error": "Global worker initializer replaces Linear/Embedding parameters with shape(1,) before skeleton shape capture; model.embed_tokens.weight mismatch",
         "batch_id": "batch_fd805c27598e4de49e3eca75",
-        "generated_tokens": 0
+        "generated_tokens": 0,
+        "fix": "ade6bb6 preserves Linear/Embedding constructor dimensions under global worker initializer;21CPU tests and full45395shape check passed"
       }
     ],
     "successful_startup": {
@@ -537,12 +538,91 @@
       "evidence": "r1-diagnostic-v3.log and worker-restart-v1-before.json on each node; startup success is not generation or benchmark success"
     },
     "worker_only_restart": {
-      "epoch": 1,
-      "generation": 2,
+      "epoch": 2,
+      "generation": 3,
       "nodes": 2,
       "http_status": 200,
-      "seconds": 186.956,
-      "weight_kv_metadata_skeleton_memfds_preserved": true
+      "seconds": 118.52458126097918,
+      "weight_kv_metadata_skeleton_memfds_preserved": true,
+      "evidence": "worker-restart-v2-before/after/deployment/preflight/response.json; restart1 retained separately"
+    },
+    "short_serial_diagnostic": {
+      "status": "diagnostic_collected_not_quality_pass",
+      "records": 12,
+      "run_sha256": "653cff0920236f8e956f1006900c44aefc191f9d8b5a987ddcaedb54b77a9830",
+      "generated_tokens": 1536,
+      "elapsed_seconds_not_benchmark": 978.8506522374228,
+      "repeat_text_comparison": [
+        {
+          "case": "arithmetic",
+          "text_exact_match": false,
+          "common_prefix_characters": 58,
+          "text_lengths": [
+            440,
+            465
+          ]
+        },
+        {
+          "case": "algebra",
+          "text_exact_match": false,
+          "common_prefix_characters": 109,
+          "text_lengths": [
+            491,
+            447
+          ]
+        },
+        {
+          "case": "chinese",
+          "text_exact_match": false,
+          "common_prefix_characters": 59,
+          "text_lengths": [
+            204,
+            190
+          ]
+        },
+        {
+          "case": "recall",
+          "text_exact_match": false,
+          "common_prefix_characters": 198,
+          "text_lengths": [
+            513,
+            543
+          ]
+        },
+        {
+          "case": "code",
+          "text_exact_match": false,
+          "common_prefix_characters": 239,
+          "text_lengths": [
+            485,
+            462
+          ]
+        },
+        {
+          "case": "logic",
+          "text_exact_match": false,
+          "common_prefix_characters": 458,
+          "text_lengths": [
+            463,
+            462
+          ]
+        }
+      ],
+      "native_token_identity_available": false,
+      "model_quality_qualified": false,
+      "performance_qualified": false
     }
+  },
+  "strict_attention_gate_scope_audit": {
+    "threshold_unchanged": {
+      "atol": 1e-05,
+      "rtol": 0.016,
+      "failure_fraction_exclusive": 0.0001
+    },
+    "source": "project generic BF16 kernel engineering gate reused first for primitives, then full FP8 attention layers",
+    "paper_validation_of_this_gate_found": false,
+    "original_hopper_or_sglang_full_layer_anchor_available": false,
+    "scope_limit": "No derived error budget for composed BF16/FP8 requantization chain; old failed reports remain failed, not proof by themselves of an algorithmic bug",
+    "independent_followup": "same-checkpoint SGLang diagnostics and separately specified held-out semantic/layout/quality checks; do not retroactively tune threshold"
   }
 }
