@@ -92,3 +92,16 @@ The middle-clipped context may have removed answer evidence, and 64 examples do
 not establish statistical equivalence or a model quality pass.
 Successful validated outputs supply `length_capped` and `reported_stop`; separate
 `reported_*_all_responses` counts also include reported finishes from invalid rows.
+
+`run_qa_sanity_guard.py` bounds the SGLang client to 5400 seconds and 2 GiB
+session RSS, with a 128 GiB host available-memory floor. Its default is plan-only;
+execution requires explicit QA source/manifest hashes and a separately reviewed
+admission for the existing v4 service. That admission records the actual service
+PID, PGID, SID and Linux start ticks, original child receipt SHA, tokenizer/KV
+and routing compatibility evidence. Map the receipt's `sid`/`starttime_ticks` to
+the ownership helper's `session`/`start_ticks` explicitly. The admission is an
+operator record, not independent HTTP verification of all deployment properties.
+The guard launches only the CPU client and can signal only its new process group;
+it neither queries GPUs nor starts/stops the model service. An interrupted client
+can leave HTTP requests running, which is reported for the resource owner to check.
+Successful collection is scored with the frozen definitions and remains descriptive.
