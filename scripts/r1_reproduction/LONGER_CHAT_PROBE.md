@@ -130,3 +130,29 @@ runs under the new source. Old manifest files must not be edited to substitute
 a new source hash. The two original protocols preserve their request/teacher
 bytes when freshly prepared with the new helper; only the new wide-pool
 protocol has the new context metadata and independent request IDs/tag.
+
+## Paired twelve-request observation, 2026-10-24 CST
+
+BatchGen full-model cohort v3 and SGLang formal candidate A v2 both completed
+the same six cases twice, using the native frozen input IDs and allowing EOS
+within2048 output tokens. The shared manifest SHA256 is
+`8704b23c1f0afd057ac8de65fdf3fd0789a8263a2afd90aef840fe8f0a772268`;
+the effective payload hash is
+`525ac820cbdb2c93236750da02fd993632fe11359fb82b78b50c21ef1a370843`.
+
+Both produced12 successful, nonempty final answers with natural stop token1.
+Manual review of each final answer after `</think>` found the expected answers:
+323, x=5,60%, `silver maple 47`,14 and Yes, in both copies on both engines.
+SGLang returned native output IDs and finite output-token log probabilities
+for every request. Its10763 output tokens differ from BatchGen's11532;
+this EOS-allowed diagnostic does not impose equal work or measure speedup.
+
+The SGLang run SHA256 is
+`c718f1e94b2100cb02f8f2726530626d3dfd05b067027e483f241b6e2267d557`;
+its final guard is
+`81211ff8f0b2917837b9c964edee9f54acb728f42044c04bfd075bf32bf41e6a`.
+The original CPU guard/client exited normally, cleanup required no signals,
+and the guard recorded no remaining service requests. This is a small
+functional check, not a general quality, deterministic-output or performance
+qualification. Earlier numerical-envelope failures and the separate QA64
+failures remain unchanged; this result does not replace them.

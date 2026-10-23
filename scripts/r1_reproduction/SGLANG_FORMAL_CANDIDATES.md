@@ -3,7 +3,9 @@
 `plan_sglang_formal_candidate.py` creates local JSON plans only. It never starts
 services, contacts the containers, queries GPUs or sends requests. It leaves
 the diagnostic launcher/executor and frozen QA/6000-request workload untouched.
-No generated candidate is admitted for a performance comparison yet.
+Candidate A has started and completed a twelve-request functional diagnostic;
+fixed-length subset tuning is in progress. No candidate is admitted for the
+formal 6000-request performance comparison yet.
 
 The identity remains `sglang0.5.5.post3+R1-routing-compat`, using the original
 R1 FP8 weights and F32 block scales. The R1 routing compatibility patch and the
@@ -84,8 +86,8 @@ The generated environment is an exact allowlist, rendered using `env -i`, so
 inherited credentials or `SGLANG_CUTLASS_MOE` cannot alter the plan. It includes
 `NCCL_RAS_ENABLE=0` as the hardware stability adaptation documented in
 [NCCL_RAS_RECOVERY.md](NCCL_RAS_RECOVERY.md). This does not upgrade NCCL. The
-expected SGLang package version is recorded, but whether the **loaded** NCCL
-library matches BatchGen remains unknown here and needs runtime provenance.
+planner records the expected SGLang package version; loaded-library provenance
+must be collected separately for each executed cohort.
 
 The diagnostic provider now also emits explicit `NCCL_RAS_ENABLE=0` and clears
 inherited BatchGen runtime preloads and CUDA compiler overrides. This tool's
@@ -172,3 +174,40 @@ division, request-pool capping and TRTLLM BF16 rejection, plus the48 topology
 combinations, provenance rejection, deterministic exclusive output and no
 process/network calls. Fixed-source tests skip only if that private export is
 absent; report skips explicitly when validating elsewhere.
+
+## Observed candidate A initialization, 2026-10-24 CST
+
+Cohort `sglang-formal-A-v2` started candidate A with 16 running requests and a
+4096-token prefill chunk per DP rank, static fraction0.85, and graphs disabled.
+Its candidate SHA256 is
+`f9685440ebe09f1b6914b3d42d2f91c8800229953b350371fd4b305be5c8d7c2`.
+Both nodes reached READY with the original R1 weights; the model's logged
+`DeepseekV3ForCausalLM` class name is its architecture, not a different checkpoint.
+
+The frozen `/get_server_info` response contains16 entries, each reporting
+52.98GiB weights,173.06GiB KV cache,2644288 token capacity and0GiB graphs.
+These memory figures are rounded runtime observations. The response has no DP
+rank identifiers, so its list order is not used as a rank map. Separate startup
+logs explicitly report2644288-token KV allocations for all16 ranks. Only rank0
+directly logs the effective `torch.bfloat16` cache dtype; other dtype statements
+remain source-derived expectations. The rank0 scheduler directly reports
+max-running16 and chunk4096; this is not a sustained-load capacity qualification.
+
+Installed `dp_attention.py` independently confirms attention TP size1 and
+128 query heads per rank for this TP16/DP16 configuration. That source inference
+is not a live tensor capture. The frozen capacity receipt SHA256 is
+`ac0614bc225bed5752e60bbd7ffc8206d7cfac179176a5ad25a714bb5a8e6c13`.
+
+Initialization reports NCCL2.28.3. All16 worker map snapshots name SGLang's own
+NCCL and CUDA13.0.48 runtime libraries, without BatchGen's runtime preload.
+The on-disk NCCL library SHA256 is
+`109a1a2fa0e622aa2393ad68dd1fec11e6b6e70934ca4db16de4a21c544e7cfa`;
+libcudart is `6876f4841bdbe30b187dcf8d7a7d2d6579bf12a36eeb430c7b28484ccdeed89a`.
+Overlay device IDs differ between maps and pathname stats, and `map_files`
+access is denied, so these are pathname-byte hashes, not hashes of mapped
+backing bytes. BatchGen used NCCL2.27.7; the versions are not matched.
+
+All16 ranks warn that eight dense FP8 shapes lack tuned `NVIDIA_L20D` config
+files and use defaults. Preserve this limitation when interpreting tuning
+results; initialization does not establish an optimized baseline. The12-request
+functional result is recorded in [LONGER_CHAT_PROBE.md](LONGER_CHAT_PROBE.md).
