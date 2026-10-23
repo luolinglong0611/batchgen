@@ -10,7 +10,7 @@ cd "$ROOT/repo"
 "$ROOT/env/bin/python" scripts/r1_reproduction/launch_r1_diagnostic.py --node-rank 0 --run-id r1-diagnostic-v1
 ```
 
-节点 1 使用 `--node-rank 1`。实际执行在各自已认证容器内追加 `--execute`，并必须显式给出该节点真实通过的 native 注册报告 `--registration-qualification`。先节点 0 后节点 1；两边尽快启动，分别把 stdout/stderr 保存到新日志。每个节点执行前逐分片重读约 641 GiB 并核对 SHA256，耗时计入加载准备，不计入推理性能。不要在这些检查完成前发送请求。
+节点 1 使用 `--node-rank 1`。实际执行在各自已认证容器内追加 `--execute`，并必须显式给出该节点真实通过的 native 注册报告 `--registration-qualification`。先节点 0 后节点 1；两边尽快启动，分别把 stdout/stderr 保存到新日志。每个节点首次执行前逐分片重读约 641 GiB 并核对 SHA256；同一节点重试可按下述显式证据复用规则避免重复读取未变化的二进制，耗时仍计入加载准备，不计入推理性能。不要在这些检查完成前发送请求。
 
 ```bash
 # node0 容器；node1 同命令改为 --node-rank 1 及新的本地日志文件名
@@ -24,6 +24,26 @@ cd "$ROOT/repo"
 ```
 
 同 run-id 的节点结果目录已存在时拒绝重用；失败应保留证据并用 v2 等新名字重试。脚本转发 SIGINT/SIGTERM 给自己启动的进程组，等待 30 秒后仅清理该组；不杀其他任务。它不安装依赖、不设置 sysctl、不改 hugepages、不清 GPU/缓存。正常 HTTP 启动入口仍执行真实 runtime preflight，未跳过版本、native 来源、AOT freshness、tokenizer 校验。
+
+## Python 修复后复用已验证的权重证据
+
+同一节点的旧运行已结束、163分片完整验证成功，但服务在随后Python初始化失败时，可使用新的run-id和 `--validated-weights-from`，例如：
+
+```bash
+"$ROOT/env/bin/python" scripts/r1_reproduction/launch_r1_diagnostic.py \
+  --node-rank 0 --run-id r1-diagnostic-v2 --execute \
+  --registration-qualification "$REGISTRATION_REPORT" \
+  --validated-weights-from "$ROOT/runs/r1-diagnostic-v1/node0/launch.json" \
+  > "$ROOT/r1-diagnostic-v2-node0.log" 2>&1
+```
+
+必须使用本节点实际产生且保留原样的 `runs/<旧run-id>/nodeN/launch.json`；不要手写或补造报告。旧报告须已结束（`exited`或`failed`）、包含全部163条weight验证记录、匹配诊断启动命令/环境及当前converter源码SHA。服务退出码非零不会抹掉此前完成的权重验证；旧status/error/exit_code保留，并在新报告记录旧证据路径、SHA256与验证开始时间。任意checksum manifest、另一个节点、缺分片、仍运行的报告均不接受。
+
+每次仍完整核验固定原始manifest、每个receipt中的source SHA/size/revision、当前converter SHA、marlin=false、当前metadata SHA及binary size。新的完整哈希记录保存binary的device/inode/size/mtime_ns/ctime_ns，下一次只有这些身份字段完全一致、receipt/metadata也未变化才复用SHA证据。任何不一致会对该分片重新读全文件计算SHA，内容不匹配即失败。
+
+首次旧v1报告尚无inode记录时，仅在当前binary为普通非symlink文件、size和旧binary SHA记录一致，且ctime_ns与mtime_ns都严格早于旧报告的验证开始UTC，才允许一次legacy复用；否则重新hash。新报告标记 `reused_legacy_prevalidation_timestamps` 并保存当前完整身份，后续采用精确身份检查。启动前再次廉价检查所有binary、metadata、receipt的身份；验证期间发生修改则失败，重新执行验证。
+
+这是**受信本地文件系统中的审计缓存**，不是报告数字签名，也不防特权用户伪造报告、回拨系统时钟或篡改文件系统元数据。如果无法信任旧报告来源或文件系统时间，省略该参数强制完整重hash。注册资格每次重新检查当前native SHA、8worker证据和释放状态；运行入口的preflight仍重新执行，二者不从旧launch报告复用。
 
 ## 路径和参数依据
 

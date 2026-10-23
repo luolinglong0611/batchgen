@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "native_tensor_registration_passed_full_model_diagnostic_starting",
+  "status": "full_model_startup_meta_rope_initialization_fix_pending",
   "model": "deepseek-ai/DeepSeek-R1",
   "model_revision": "20f2865710d161dc4a32c4e8c3d7c42c7b9852f8",
   "paper_reference": {
@@ -503,6 +503,13 @@
     "forward_executed": false,
     "performance_benchmark_executed": false,
     "speedup_established": false,
-    "status": "starting diagnostic; all 163 converted shards will be rehashed before launch"
+    "status": "v1 exited during metadata-only RoPE construction on both nodes; full163shard hashes passed; no full weights allocation or inference",
+    "prior_failures": [
+      {
+        "run_id": "r1-diagnostic-v1",
+        "phase": "DeepSeek_Parameter_Server._parse_state_dict",
+        "error": "RoPE selected CUDA under ambient meta context; Cannot copy out of meta tensor"
+      }
+    ]
   }
 }

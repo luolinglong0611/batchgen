@@ -202,8 +202,15 @@ class DeepseekV3RotaryEmbedding(nn.Module):
 		self.max_position_embeddings = max_position_embeddings
 		self.base = base
 		
-		# Store the original device
-		self.init_device = device if device is not None else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+		# Metadata-only parameter enumeration must keep RoPE on meta too. Real
+		# serving retains its existing CUDA-if-available default, and an explicit
+		# device always takes precedence over the ambient construction context.
+		if device is not None:
+			self.init_device = device
+		elif torch.get_default_device().type == "meta":
+			self.init_device = torch.device("meta")
+		else:
+			self.init_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 		
 		# Calculate on specified device and don't move it around
 		inv_freq = 1.0 / (

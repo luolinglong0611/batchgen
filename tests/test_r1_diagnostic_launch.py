@@ -8,6 +8,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
+from datetime import datetime, timezone, timedelta
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('r1_diagnostic_launch', ROOT / 'scripts/r1_reproduction/launch_r1_diagnostic.py')
@@ -161,6 +163,139 @@ class RegistrationEvidenceGateTest(unittest.TestCase):
                                  '--node-rank', '0', '--execute'], capture_output=True, text=True)
         self.assertEqual(result.returncode, 2)
         self.assertIn('--execute requires --registration-qualification', result.stderr)
+
+
+class WeightValidationReuseTest(unittest.TestCase):
+    """Tiny CPU fixture only: no actual model hashes or launch qualification."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        for folder in ('repo/scripts/r1_reproduction', 'repo/batchgen/ckpt_converter',
+                       'converted', 'converted.receipts', 'runs/old/node0'):
+            (self.root / folder).mkdir(parents=True)
+        converter = self.root / 'repo/batchgen/ckpt_converter/ckpt_converter.py'
+        converter.write_text('# CPU test placeholder, not a real converter')
+        self.converter_sha = launch.digest(converter)
+        entries = [{'Path': f'model-{i:05d}-of-000163.safetensors',
+                    'Sha256': hashlib.sha256(f'fake source{i}'.encode()).hexdigest(), 'Size': i}
+                   for i in range(1, 164)]
+        manifest = self.root / 'repo/scripts/r1_reproduction/r1_model_manifest.json'
+        manifest.write_text(json.dumps(entries))
+        patcher = mock.patch.object(launch, 'MANIFEST_SHA', launch.digest(manifest))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        quiet = mock.patch('builtins.print')
+        quiet.start()
+        self.addCleanup(quiet.stop)
+        for entry in entries:
+            stem = Path(entry['Path']).stem
+            binary = self.root / 'converted' / (stem + '.bin')
+            binary.write_bytes(entry['Path'].encode())
+            metadata = binary.with_suffix('.json')
+            metadata.write_text(json.dumps({'unit_test': stem}))
+            receipt = {'source_sha256': entry['Sha256'], 'source_size': entry['Size'],
+                       'source_revision': launch.REVISION, 'manifest_sha256': launch.MANIFEST_SHA,
+                       'converter_sha256': self.converter_sha, 'marlin': False,
+                       'validation': {'binary_size': binary.stat().st_size,
+                                      'binary_sha256': launch.digest(binary),
+                                      'metadata_sha256': launch.digest(metadata)}}
+            (self.root / 'converted.receipts' / (entry['Path'] + '.converted.json')).write_text(json.dumps(receipt))
+        self.records, _ = launch.validate_weights(self.root)
+        self.binary = self.root / 'converted/model-00001-of-000163.bin'
+        self.receipt = self.root / 'converted.receipts/model-00001-of-000163.safetensors.converted.json'
+        self.path = self.root / 'runs/old/node0/launch.json'
+        env, cmd = launch.plan(self.root, 0, 'old')
+        self.report = {'status': 'exited', 'exit_code': 1, 'hostname': launch.HOSTS[0],
+                       'utc': datetime.now(timezone.utc).isoformat(),
+                       'environment': env, 'command': cmd, 'weights': self.records,
+                       'source_sha256': {'batchgen/ckpt_converter/ckpt_converter.py': self.converter_sha}}
+        self.write_report()
+
+    def write_report(self):
+        self.path.write_text(json.dumps(self.report))
+
+    def validate(self):
+        return launch.validate_weights(self.root, self.path, 0)
+
+    def test_full_hash_records_identity_and_exact_reuse_avoids_binary_reads(self):
+        self.assertTrue(all(r['binary_verification']['mode'] == 'full_sha256' for r in self.records))
+        real_digest = launch.stable_digest
+        def no_bin(path):
+            self.assertNotEqual(path.suffix, '.bin', 'unchanged binary was unexpectedly read')
+            return real_digest(path)
+        with mock.patch.object(launch, 'stable_digest', side_effect=no_bin):
+            records, evidence = self.validate()
+        self.assertTrue(all(r['binary_verification']['mode'] == 'reused_exact_identity' for r in records))
+        self.assertEqual(evidence['prior_status'], 'exited')
+        self.assertEqual(evidence['prior_exit_code'], 1)
+        self.assertEqual(evidence['report_sha256'], launch.digest(self.path))
+        launch.check_weight_identities(records)
+
+    def test_legacy_timestamps_allow_reuse_but_old_start_requires_real_hash(self):
+        self.report['weights'] = [{k: v for k, v in r.items() if k in
+                                 ('shard', 'binary_size', 'binary_sha256', 'metadata_sha256')}
+                                 for r in self.records]
+        self.write_report()
+        records, _ = self.validate()
+        self.assertTrue(all(r['binary_verification']['mode'] == 'reused_legacy_prevalidation_timestamps' for r in records))
+        self.report['utc'] = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        self.write_report()
+        records, _ = self.validate()
+        self.assertTrue(all(r['binary_verification']['mode'] == 'full_sha256' for r in records))
+
+    def test_replaced_identical_binary_rehashes_and_corruption_fails(self):
+        replacement = self.root / 'same-bytes'
+        replacement.write_bytes(self.binary.read_bytes())
+        replacement.replace(self.binary)
+        records, _ = self.validate()
+        self.assertEqual(records[0]['binary_verification']['mode'], 'full_sha256')
+        self.assertEqual(records[1]['binary_verification']['mode'], 'reused_exact_identity')
+        self.binary.write_bytes(b'x' * self.binary.stat().st_size)
+        with self.assertRaisesRegex(RuntimeError, 'SHA256 mismatch'):
+            self.validate()
+
+    def test_current_receipts_metadata_and_source_are_always_validated(self):
+        original = self.receipt.read_text()
+        self.receipt.write_text(json.dumps(json.loads(original), indent=2))
+        records, _ = self.validate()
+        self.assertEqual(records[0]['binary_verification']['mode'], 'full_sha256')
+        receipt = json.loads(original)
+        receipt['source_sha256'] = '0' * 64
+        self.receipt.write_text(json.dumps(receipt))
+        with self.assertRaisesRegex(RuntimeError, 'source_sha256 mismatch'):
+            self.validate()
+        self.receipt.write_text(original)
+        self.binary.with_suffix('.json').write_text('{}')
+        with self.assertRaisesRegex(RuntimeError, 'SHA256 mismatch'):
+            self.validate()
+
+    def test_arbitrary_manifest_incomplete_live_or_other_node_report_rejected(self):
+        arbitrary = self.root / 'checksums.json'
+        arbitrary.write_text(self.path.read_text())
+        with self.assertRaisesRegex(RuntimeError, 'local runs'):
+            launch.validate_weights(self.root, arbitrary, 0)
+        for key, wrong in [('weights', self.records[:-1]), ('status', 'launching'),
+                           ('hostname', launch.HOSTS[1]), ('command', []),
+                           ('source_sha256', {}),
+                           ('utc', (datetime.now(timezone.utc) + timedelta(days=1)).isoformat())]:
+            with self.subTest(field=key):
+                old = self.report[key]
+                self.report[key] = wrong
+                self.write_report()
+                with self.assertRaises(RuntimeError):
+                    self.validate()
+                self.report[key] = old
+
+    def test_symlink_and_postvalidation_change_are_rejected(self):
+        self.receipt.write_text(self.receipt.read_text() + '\n')
+        with self.assertRaisesRegex(RuntimeError, 'changed before launch'):
+            launch.check_weight_identities(self.records)
+        target = self.root / 'binary-target'
+        self.binary.replace(target)
+        self.binary.symlink_to(target)
+        with self.assertRaisesRegex(RuntimeError, 'nonregular'):
+            self.validate()
 
 
 if __name__ == '__main__':

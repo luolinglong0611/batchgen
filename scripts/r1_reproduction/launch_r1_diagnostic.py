@@ -2,8 +2,8 @@
 """Print a two-node R1 diagnostic command; --execute explicitly loads the model.
 
 No torch import, CUDA context, filesystem changes, or remote operation in plan
-mode. Execute mode validates all 163 converted shard receipts and complete file
-hashes, then uses the normal HTTP entry point (including its real preflight).
+mode. Execute mode validates all 163 converted shard receipts and file hashes
+(or explicit unchanged-file evidence from a prior local launch), then uses the normal HTTP entry point (including its real preflight).
 This is an eager correctness experiment, not a performance-qualified launcher.
 """
 import argparse
@@ -16,6 +16,7 @@ import re
 import shlex
 import signal
 import socket
+import stat
 import subprocess
 import sys
 
@@ -180,7 +181,87 @@ def validate_registration_qualification(root, rank, path):
             'worker_count': 8, 'clean_native_release': True, 'derived_fixture': fixture}
 
 
-def validate_weights(root):
+def file_identity(path):
+    """Local regular-file identity; access time is deliberately not included."""
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode):
+        raise RuntimeError(f'Missing/nonregular converted artifact: {path}')
+    return {'path': str(path.absolute()), 'dev': info.st_dev, 'ino': info.st_ino,
+            'size': info.st_size, 'mtime_ns': info.st_mtime_ns, 'ctime_ns': info.st_ctime_ns}
+
+
+def stable_digest(path):
+    before = file_identity(path)
+    # Hash an opened regular file, never follow a last-component symlink swapped
+    # in after lstat. Verify both the fd and pathname still identify that file.
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, 'rb') as stream:
+        opened = os.fstat(stream.fileno())
+        if (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns) != (
+                before['dev'], before['ino'], before['size'], before['mtime_ns'], before['ctime_ns']):
+            raise RuntimeError(f'File changed before SHA256 read: {path}')
+        h = hashlib.sha256()
+        for chunk in iter(lambda: stream.read(8 * 1024**2), b''):
+            h.update(chunk)
+        after = os.fstat(stream.fileno())
+        if (after.st_size, after.st_mtime_ns, after.st_ctime_ns) != (
+                before['size'], before['mtime_ns'], before['ctime_ns']):
+            raise RuntimeError(f'File changed during SHA256 read: {path}')
+    if file_identity(path) != before:
+        raise RuntimeError(f'File changed during SHA256 read: {path}')
+    return h.hexdigest(), before
+
+
+def load_weights_evidence(root, rank, path, entries, converter_sha):
+    """Accept a prior local launcher record, never a standalone checksum manifest.
+
+    This is an audit cache on a trusted local filesystem, not an authentication
+    scheme against privileged edits to reports, clocks or filesystem metadata.
+    """
+    if path.is_symlink():
+        raise RuntimeError('Prior launch report must not be a symlink')
+    path = path.resolve(strict=True)
+    runs = (root / 'runs').resolve()
+    if (not path.is_relative_to(runs) or len(path.relative_to(runs).parts) != 3
+            or path.name != 'launch.json' or path.parent.name != f'node{rank}'):
+        raise RuntimeError('Prior weight evidence must be a local runs/<run-id>/nodeN/launch.json')
+    before = file_identity(path)
+    payload = path.read_bytes()
+    def unique(pairs):
+        obj = {}
+        for key, value in pairs:
+            if key in obj:
+                raise RuntimeError(f'Duplicate prior report field: {key}')
+            obj[key] = value
+        return obj
+    data = json.loads(payload, object_pairs_hook=unique)
+    if file_identity(path) != before:
+        raise RuntimeError('Prior launch report changed while reading')
+    if data.get('hostname') != HOSTS[rank] or data.get('status') not in ('exited', 'failed'):
+        raise RuntimeError('Prior launch report must belong to this node and have terminated')
+    cmd = data.get('command', [])
+    env, expected = plan(root, rank, path.parent.parent.name)
+    if cmd != expected or data.get('environment') != env:
+        raise RuntimeError('Prior report does not match this diagnostic launch command/environment')
+    if data.get('source_sha256', {}).get('batchgen/ckpt_converter/ckpt_converter.py') != converter_sha:
+        raise RuntimeError('Prior converter source differs; omit reuse and perform full validation')
+    started = datetime.fromisoformat(data['utc'])
+    if started.tzinfo is None or started > datetime.now(timezone.utc):
+        raise RuntimeError('Prior launch UTC is missing timezone or is in the future')
+    delta = started.astimezone(timezone.utc) - datetime(1970, 1, 1, tzinfo=timezone.utc)
+    started_ns = (delta.days * 86400 + delta.seconds) * 10**9 + delta.microseconds * 1000
+    records = data.get('weights', [])
+    if (not isinstance(records, list) or len(records) != 163
+            or {r.get('shard') for r in records} != {e['Path'] for e in entries}):
+        raise RuntimeError('Prior report lacks all 163 validated shards')
+    evidence = {'report': str(path), 'report_sha256': hashlib.sha256(payload).hexdigest(),
+                'prior_status': data['status'], 'prior_exit_code': data.get('exit_code'),
+                'prior_error': data.get('error'), 'prior_validation_started_utc': data['utc'],
+                'trust_scope': 'local launcher record and unchanged filesystem metadata; not signed evidence'}
+    return {record['shard']: record for record in records}, evidence, started_ns
+
+
+def validate_weights(root, validated_from=None, rank=None):
     manifest = root / 'repo/scripts/r1_reproduction/r1_model_manifest.json'
     if digest(manifest) != MANIFEST_SHA:
         raise RuntimeError('Pinned model manifest changed')
@@ -188,6 +269,9 @@ def validate_weights(root):
     if len(entries) != 163:
         raise RuntimeError('Expected exactly 163 original R1 shards')
     converter_sha = digest(root / 'repo/batchgen/ckpt_converter/ckpt_converter.py')
+    previous, evidence, started_ns = {}, None, None
+    if validated_from is not None:
+        previous, evidence, started_ns = load_weights_evidence(root, rank, validated_from, entries, converter_sha)
     expected_files, records = set(), []
     for entry in entries:
         name = entry['Path']
@@ -195,27 +279,73 @@ def validate_weights(root):
         binary = root / 'converted' / (stem + '.bin')
         metadata = root / 'converted' / (stem + '.json')
         receipt_path = root / 'converted.receipts' / (name + '.converted.json')
-        for path in (binary, metadata, receipt_path):
-            if not path.is_file() or path.is_symlink():
-                raise RuntimeError(f'Missing/nonregular converted artifact: {path}')
+        binary_before = file_identity(binary)
+        receipt_sha, receipt_identity = stable_digest(receipt_path)
         receipt = json.loads(receipt_path.read_text())
+        if file_identity(receipt_path) != receipt_identity:
+            raise RuntimeError(f'Receipt changed while reading: {receipt_path}')
         for key, value in {'source_sha256': entry['Sha256'], 'source_size': entry['Size'],
                            'source_revision': REVISION, 'manifest_sha256': MANIFEST_SHA,
                            'converter_sha256': converter_sha, 'marlin': False}.items():
             if receipt.get(key) != value:
                 raise RuntimeError(f'{receipt_path}: {key} mismatch')
         v = receipt['validation']
-        if binary.stat().st_size != v['binary_size']:
+        if binary_before['size'] != v['binary_size']:
             raise RuntimeError(f'{binary}: size mismatch')
-        for path, field in ((binary, 'binary_sha256'), (metadata, 'metadata_sha256')):
-            if digest(path) != v[field]:
-                raise RuntimeError(f'{path}: SHA256 mismatch')
-        records.append({'shard': name, **v})
+        metadata_sha, metadata_identity = stable_digest(metadata)
+        if metadata_sha != v['metadata_sha256']:
+            raise RuntimeError(f'{metadata}: SHA256 mismatch')
+        prior = previous.get(name)
+        reuse_mode, fallback_reason = None, 'no prior evidence'
+        if prior is not None:
+            # Even unchanged metadata/receipts are revalidated above. A changed
+            # receipt, expected binary hash, metadata hash or identity forces
+            # a new full read of this binary, never an optimistic cache hit.
+            validation_matches = all(prior.get(key) == value for key, value in v.items())
+            receipt_matches = prior.get('receipt_sha256', receipt_sha) == receipt_sha
+            small_file_identities_match = (
+                prior.get('metadata_identity', metadata_identity) == metadata_identity
+                and prior.get('receipt_identity', receipt_identity) == receipt_identity)
+            if not validation_matches or not receipt_matches or not small_file_identities_match:
+                fallback_reason = 'prior validation or receipt differs'
+            elif 'binary_identity' in prior:
+                if prior['binary_identity'] == binary_before:
+                    reuse_mode = 'reused_exact_identity'
+                else:
+                    fallback_reason = 'binary filesystem identity changed'
+            elif (0 < binary_before['ctime_ns'] < started_ns
+                  and 0 < binary_before['mtime_ns'] < started_ns):
+                reuse_mode = 'reused_legacy_prevalidation_timestamps'
+            else:
+                fallback_reason = 'legacy timestamps do not prove unchanged since validation began'
+        if reuse_mode is None:
+            binary_sha, identity_after_hash = stable_digest(binary)
+            if binary_sha != v['binary_sha256']:
+                raise RuntimeError(f'{binary}: SHA256 mismatch')
+            if identity_after_hash != binary_before:
+                raise RuntimeError(f'Binary changed during validation: {binary}')
+        if file_identity(binary) != binary_before:
+            raise RuntimeError(f'Binary changed during validation: {binary}')
+        verification = {'mode': reuse_mode or 'full_sha256', 'fallback_reason': None if reuse_mode else fallback_reason}
+        if evidence:
+            verification['prior_report_sha256'] = evidence['report_sha256']
+        records.append({'shard': name, **v, 'binary_identity': binary_before,
+                        'metadata_identity': metadata_identity, 'receipt_identity': receipt_identity,
+                        'receipt_sha256': receipt_sha, 'binary_verification': verification})
         expected_files.update((binary.name, metadata.name))
-        print(f'Validated {len(records)}/163: {name}', flush=True)
+        print(f'Validated {len(records)}/163: {name} [{verification["mode"]}]', flush=True)
     if {p.name for p in (root / 'converted').iterdir()} != expected_files:
         raise RuntimeError('Converted directory has unexpected files: native loader scans this directory')
-    return records
+    return records, evidence
+
+
+def check_weight_identities(records):
+    """Cheap final check after all validation and immediately before launch."""
+    for record in records:
+        for field in ('binary_identity', 'metadata_identity', 'receipt_identity'):
+            identity = record[field]
+            if file_identity(Path(identity['path'])) != identity:
+                raise RuntimeError(f'Validated weight artifact changed before launch: {identity["path"]}; rerun validation')
 
 
 def main():
@@ -225,6 +355,8 @@ def main():
     parser.add_argument('--run-id', default='r1-diagnostic-v1')
     parser.add_argument('--registration-qualification', type=Path,
                         help='Required for --execute: local passed native 675GiB/8worker/shifted-tensor report')
+    parser.add_argument('--validated-weights-from', type=Path,
+                        help='Optional prior terminated local launch.json; rehash any shard lacking unchanged-file proof')
     parser.add_argument('--execute', action='store_true', help='Validate and launch the full model in this allocated container')
     args = parser.parse_args()
     if not args.run_id or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_' for c in args.run_id):
@@ -250,9 +382,14 @@ def main():
              'hostname': socket.gethostname(), 'environment': env, 'command': command}
     report = report_dir / 'launch.json'
     try:
+        if args.validated_weights_from is not None:
+            state['requested_weight_reuse'] = {
+                'report': str(args.validated_weights_from.absolute()),
+                'report_sha256': stable_digest(args.validated_weights_from)[0]}
         state['registration_qualification'] = validate_registration_qualification(
             args.root, args.node_rank, args.registration_qualification)
-        state['weights'] = validate_weights(args.root)
+        state['weights'], state['weight_validation_reuse'] = validate_weights(
+            args.root, args.validated_weights_from, args.node_rank)
         state['git_commit'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=args.root / 'repo', text=True).strip()
         state['source_sha256'] = {str(p.relative_to(args.root / 'repo')): digest(p)
                                   for p in (args.root / 'repo/batchgen').rglob('*.py')}
@@ -264,6 +401,7 @@ def main():
         qualified_core = state['registration_qualification']
         if digest(Path(qualified_core['core_engine_path'])) != qualified_core['core_engine_sha256']:
             raise RuntimeError('Native library changed while validating weights; rerun qualification')
+        check_weight_identities(state['weights'])
         # Normal entry point retains all version, native-origin, freshness and
         # tokenizer checks; no fabricated capability, fallback, or preflight skip.
         child = subprocess.Popen(command, cwd=args.root / 'repo', env=child_env,
