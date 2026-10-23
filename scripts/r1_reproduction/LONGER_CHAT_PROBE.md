@@ -208,3 +208,45 @@ SHA256 `6b2aeacb2ce30b53b28366437af76b43b7177542f498ca22e52f882cb28803f6`.
 The result does not isolate a TP8 kernel defect, establish general quality,
 or revise any earlier numerical failure. Fixed-length throughput pilots are
 retained as performance diagnostics with this quality failure explicit.
+
+## Separate full-context paired semantic diagnostic
+
+The new protocol freezes48 unique original LongBench questions from six tasks,
+eight per task, before inference. It preserves complete contexts and applies
+the original R1 chat template once, followed by a common final-answer-format
+instruction. Native inputs range from1616 to17636 tokens, with median8405.
+Selection uses source IDs and native lengths only. Each task targets four
+short and four long inputs; MuSiQue has only three eligible short inputs, so
+the preregistered shortage rule selects three short and five long. NarrativeQA
+excludes115 original rows exceeding the input allowance. One selected Qasper
+question overlaps the old QA64 fixture; no old output was used in selection.
+
+The CPU builder completed in69.77 seconds with sampled peak RSS814567424 bytes,
+CUDA uninitialized, unchanged sources and exact HF/service single/batched
+token-ID parity for all48 questions. Both original CPU identities exited0
+without cleanup signals. Actual builder-report SHA256 is
+`5811d6fdb9ca30bfbbec8efaea98df1110eefbda643bf44e2d89ac22afe1cb1d`;
+the selection digest is
+`165f4dedd04831308739217767fcfe75196ffb7c2fba9d8b2f99c02fa63fe0ea`;
+the raw questions-file SHA256 is
+`cf95e858647603f8ccd40d70419c2384e45aeccc0bbe5611146c1695e37a81ca`.
+CPU parity alone is not proof of the future BG worker's actual input consumption.
+
+At21:35:19 UTC on2026-10-23, B-v1 began96 quality requests: two ordered rounds
+of48, at most16 HTTP requests in flight, each question assigned consistently
+to one of the two replicas. Temperature0.6, top-p0.95, disabled top-k (SG-1,
+BG0), EOS allowed and cap8192 are frozen. SG seeds are20261024/20261025;
+BG has no matching request-seed interface, so identical RNG streams are not
+claimed. No extra warmup or retries are included. Native-ID/log-probability
+coverage is measured separately from HTTP success. Its result is pending.
+
+The all48-question denominator, two-draw question means and task-macro
+token-F1 are fixed in advance. Missing, failed, empty, nonfinite, repetitive,
+length-capped or unextractable results remain zero with separate coverage
+counts. A descriptive paired bootstrap resamples questions within tasks,
+retaining both engines and draws together; it cannot establish equivalence
+or a noninferiority pass. The original extractor and failed gates remain
+unchanged. Preexecution scoring-supplement SHA256 is
+`0aac067dbcd0b5455ec91458e182e12fa535ac212ecb0db4df31e2e8304d49be`.
+BG requires a separate native-trace-enabled quality cohort; performance
+cohorts keep tracing disabled and cannot supply those quality trace records.
