@@ -210,3 +210,23 @@ the local freeze index is
 Subsequent22:21:28 UTC observations found both services healthy with no active
 batch, intake or scheduled requests. This is a completed small diagnostic
 pilot, not a formal6000-request result or a successful speedup reproduction.
+
+An independent comparison with the closed SGLang A graph-v5 first32 pilot
+verified the same effective-payload hash
+`991176dce4fb76a3bb8bab7db4cc50ffd1e0106890269dd4ec9966c4cc7488cd`.
+
+| First32, input8192/output2048 | End-to-end seconds | Output tokens/s |
+| --- | ---: | ---: |
+| BatchGen v4, framework CUDA Graph disabled |527.178497202|124.314630335|
+| SGLang A v5, graph128/c128 |90.197194855|726.585789119|
+
+This small pilot shows no BatchGen speedup: its elapsed time is5.844733 times
+the SGLang A result. BatchGen measures upload through complete batch-result
+retrieval; SGLang measures first HTTP attempt through the last complete
+response body. Both exclude preparation, offline validation and their separate
+one-request warmup. The measured BatchGen upload/create-preparation interval
+is0.019738892 seconds, so changing that boundary cannot explain the large
+difference. Neither result is a repeated, saturated or isolated-kernel
+measurement; the graph settings differ and quality remains unqualified.
+Independent comparison receipt SHA256:
+`5f3f168503b1bff0f781684db595d439842213dad46bba728d38881fcf2a4d75`.
