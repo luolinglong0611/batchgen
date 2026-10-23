@@ -31,7 +31,7 @@ class SGLangDiagnosticPlanTest(unittest.TestCase):
             self.assertEqual(env['SGLANG_SUPPORT_CUTLASS_BLOCK_FP8'], '0')
 
     def test_inherited_batchgen_compiler_and_backend_overrides_removed(self):
-        inherited = {'DISABLE_MMA_V5': '1', 'TRITON_PTXAS_PATH': '/cuda13/ptxas',
+        inherited = {'CPATH': '/bad/include', 'CPLUS_INCLUDE_PATH': '/bad/cxx', 'LIBRARY_PATH': '/bad/lib', 'DISABLE_MMA_V5': '1', 'TRITON_PTXAS_PATH': '/cuda13/ptxas',
                      'TRITON_PTXAS_BLACKWELL_PATH': '/bad/ptxas',
                      'SGLANG_ENABLE_FLASHINFER_FP8_GEMM': '1', 'NCCL_IB_DISABLE': '1',
                      'BATCHGEN_ENABLE_ALL_TO_ALL': '1', 'SGL_USE_DEEPGEMM_BMM': '1'}
@@ -39,11 +39,14 @@ class SGLangDiagnosticPlanTest(unittest.TestCase):
         effective = {k: v for k, v in inherited.items() if k not in unset}
         effective.update(env)
         for key in ('DISABLE_MMA_V5', 'TRITON_PTXAS_PATH', 'TRITON_PTXAS_BLACKWELL_PATH',
-                    'BATCHGEN_ENABLE_ALL_TO_ALL', 'NCCL_IB_DISABLE', 'SGL_USE_DEEPGEMM_BMM'):
+                    'BATCHGEN_ENABLE_ALL_TO_ALL', 'NCCL_IB_DISABLE', 'SGL_USE_DEEPGEMM_BMM',
+                    'CPLUS_INCLUDE_PATH'):
             self.assertNotIn(key, effective)
         self.assertEqual(effective['NCCL_IB_GID_INDEX'], '3')
         self.assertEqual(effective['GLOO_SOCKET_IFNAME'], 'eth0')
         self.assertIn('private-cxx-runtime/lib', effective['LD_LIBRARY_PATH'])
+        self.assertEqual(effective['LIBRARY_PATH'], str(launch.ROOT / 'sglang-baseline-v8/private-cuda-link/lib'))
+        self.assertEqual(effective['CPATH'], str(launch.ROOT / 'sglang-baseline-v8/baseline-env/lib/python3.11/site-packages/nvidia/cu13/include'))
 
     def test_loading_stays_mmap_and_shard_iterator_is_serial(self):
         _, _, cmd = launch.plan(launch.ROOT, 0, {})

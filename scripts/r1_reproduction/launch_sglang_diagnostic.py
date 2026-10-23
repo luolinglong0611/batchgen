@@ -24,7 +24,8 @@ VERSIONS = {'sglang': '0.5.5.post3', 'torch': '2.9.0+cu130',
             'triton': '3.5.0+git4caa0328', 'nvidia-nccl-cu13': '2.28.3',
             'sgl-kernel': '0.3.17.post1', 'flashinfer-python': '0.5.2',
             'flashinfer-cubin': '0.5.2', 'nvidia-cutlass-dsl': '4.3.0.dev0',
-            'transformers': '4.57.1'}
+            'transformers': '4.57.1', 'nvidia-cublas': '13.0.0.19',
+            'nvidia-cuda-nvrtc': '13.0.48', 'nvidia-cuda-runtime': '13.0.48'}
 
 
 def sha(path):
@@ -37,12 +38,17 @@ def plan(root, rank, inherited=None):
     toolkit = root / 'cuda130-packages/nvidia/cu13'
     unset = sorted(set(k for k in inherited if k.startswith(('BATCHGEN_', 'SGLANG_', 'SGL_', 'NCCL_', 'FLASHINFER_'))) | {
         'PYTHONPATH', 'PYTHONHOME', 'DISABLE_MMA_V5', 'TRITON_PTXAS_PATH',
+        'CPATH', 'C_INCLUDE_PATH', 'CPLUS_INCLUDE_PATH', 'LIBRARY_PATH',
         'TRITON_PTXAS_BLACKWELL_PATH', 'NVIDIA_VISIBLE_DEVICES', 'TORCH_CUDA_CHANNEL',
     })
     env = {
         'CUDA_VISIBLE_DEVICES': '0,1,2,3,4,5,6,7', 'CUDA_HOME': str(toolkit),
         'PATH': f'{base}/baseline-env/bin:{toolkit}/bin:/usr/local/bin:/usr/bin:/bin',
-        'LD_LIBRARY_PATH': str(base / 'private-cxx-runtime/lib'),
+        'LD_LIBRARY_PATH': f'{base}/private-cxx-runtime/lib:{base}/baseline-env/lib/python3.11/site-packages/nvidia/cu13/lib',
+        'LIBRARY_PATH': str(base / 'private-cuda-link/lib'),
+        # Private nvcc toolkit omits cuBLAS/NVRTC headers. Use the installed
+        # matching CUDA 13 wheel headers for FlashInfer JIT, not system CUDA.
+        'CPATH': str(base / 'baseline-env/lib/python3.11/site-packages/nvidia/cu13/include'),
         'TRITON_CACHE_DIR': str(base / 'cache/triton-runtime'),
         # TP16 shared-expert down K=128 is unsupported by FlashInfer TRTLLM
         # dense GEMM (requires K>=256). Disable UE8M0 re-quantization too.
@@ -140,6 +146,14 @@ def inspect(root, rank, env, unset, command):
     for name, item in provenance['libraries'].items():
         if sha(base / 'private-cxx-runtime/lib' / name) != item['sha256']:
             raise RuntimeError('Private C++ runtime changed')
+    cuda_link = base / 'private-cuda-link/lib/libcudart.so'
+    runtime = site / 'nvidia/cu13/lib/libcudart.so.13'
+    cuda_provenance = json.loads((base / 'private-cuda-link/provenance.json').read_text())
+    if not cuda_link.is_symlink() or cuda_link.resolve() != runtime.resolve() or sha(runtime) != cuda_provenance['runtime_sha256']:
+        raise RuntimeError('Private CUDA runtime link/provenance mismatch')
+    for name, expected in cuda_provenance['headers_sha256'].items():
+        if sha(site / 'nvidia/cu13/include' / name) != expected:
+            raise RuntimeError('CUDA wheel header provenance mismatch')
     cpu_env = {k: v for k, v in os.environ.items() if k not in unset}
     cpu_env.update(env, CUDA_VISIBLE_DEVICES='', NVIDIA_VISIBLE_DEVICES='none')
     result = subprocess.run([command[0], '-c',

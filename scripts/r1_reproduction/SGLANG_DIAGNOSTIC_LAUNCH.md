@@ -131,3 +131,17 @@ MLA KV 数据，另有页表/工作空间。`--mem-fraction-static 0.85` 仍保�
 native C++允许I128，但是否存在兼容的预编译tactic仍需实机确认。
 编译、cubin获取、无可用tactic、dtype/shape或nonfinite错误都将保留traceback并退出非零，
 不改I维度、不切换后端、不自动放宽门槛重试。
+
+FlashInfer 0.5.2 JIT additionally requires the installed baseline CUDA 13 wheel
+headers (`nvidia/cu13/include`) through explicit `CPATH`: the separate 13.0.88
+compiler toolkit lacks `cublasLt.h` and `nvrtc.h`. The node1 primitive v1 failure
+records this missing-header error; it is not a numerical or tactic failure.
+Inherited include/library search overrides are cleared. This does not replace
+Triton’s bundled Blackwell ptxas 12.9.
+
+The CUDA runtime wheel supplies only `libcudart.so.13`; FlashInfer links with
+`-lcudart`. `private-cuda-link/lib/libcudart.so` is an isolated symlink to that
+baseline wheel, with target SHA and header ownership in `provenance.json`.
+Explicit `LIBRARY_PATH` uses this directory; `LD_LIBRARY_PATH` includes the
+baseline cu13 lib directory after the private C++ runtime. Node1 primitive v2
+retains the prior missing `-lcudart` linker failure. No system/toolkit files change.
