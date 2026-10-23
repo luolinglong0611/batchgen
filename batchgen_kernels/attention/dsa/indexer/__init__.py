@@ -1,6 +1,7 @@
 import torch
 from torch.utils.cpp_extension import load
 import os
+from functools import lru_cache
 
 _current_dir = os.path.dirname(os.path.abspath(__file__))
 _csrc_dir = os.path.join(_current_dir, "csrc")
@@ -17,29 +18,36 @@ _cuda_flags = [
     '--expt-extended-lambda',
 ]
 
-_hadamard_cuda = load(
-    name="fast_hadamard_transform_cuda",
-    sources=[
-        os.path.join(_csrc_dir, "hadamard_binding.cpp"),
-        os.path.join(_csrc_dir, "fast_hadamard_transform_cuda.cu"),
-    ],
-    extra_cflags=['-O3', '-std=c++17'],
-    extra_cuda_cflags=_cuda_flags,
-    extra_include_paths=[_csrc_dir],
-    verbose=False,
-)
+@lru_cache(maxsize=1)
+def _get_hadamard_cuda():
+    # Importing another indexer entrypoint must not compile this optional kernel.
+    return load(
+        name="fast_hadamard_transform_cuda",
+        sources=[
+            os.path.join(_csrc_dir, "hadamard_binding.cpp"),
+            os.path.join(_csrc_dir, "fast_hadamard_transform_cuda.cu"),
+        ],
+        extra_cflags=['-O3', '-std=c++17'],
+        extra_cuda_cflags=_cuda_flags,
+        extra_include_paths=[_csrc_dir],
+        verbose=False,
+    )
 
-_fused_rope_hadamard_cuda = load(
-    name="fused_rope_hadamard_cuda",
-    sources=[
-        os.path.join(_csrc_dir, "fused_rope_hadamard_binding.cpp"),
-        os.path.join(_csrc_dir, "fused_rope_hadamard.cu"),
-    ],
-    extra_cflags=['-O3', '-std=c++17'],
-    extra_cuda_cflags=_cuda_flags,
-    extra_include_paths=[_csrc_dir],
-    verbose=False,
-)
+
+@lru_cache(maxsize=1)
+def _get_fused_rope_hadamard_cuda():
+    # The allocating and out-buffer APIs share one compiled extension instance.
+    return load(
+        name="fused_rope_hadamard_cuda",
+        sources=[
+            os.path.join(_csrc_dir, "fused_rope_hadamard_binding.cpp"),
+            os.path.join(_csrc_dir, "fused_rope_hadamard.cu"),
+        ],
+        extra_cflags=['-O3', '-std=c++17'],
+        extra_cuda_cflags=_cuda_flags,
+        extra_include_paths=[_csrc_dir],
+        verbose=False,
+    )
 
 
 # Fused indexer-K quantize + page-split write. Unlike the two kernels above it
@@ -52,7 +60,7 @@ from batchgen_kernels.attention.dsa.indexer.indexer_k_write_fp8 import (  # noqa
 
 
 def hadamard_transform(x: torch.Tensor, scale: float = 1.0) -> torch.Tensor:
-    return _hadamard_cuda.fast_hadamard_transform(x, scale)
+    return _get_hadamard_cuda().fast_hadamard_transform(x, scale)
 
 
 def fused_rope_hadamard(
@@ -74,7 +82,7 @@ def fused_rope_hadamard(
     Returns:
         [batch, 128] bf16 tensor
     """
-    return _fused_rope_hadamard_cuda.fused_rope_hadamard(x, cos_cache, sin_cache, positions, scale)
+    return _get_fused_rope_hadamard_cuda().fused_rope_hadamard(x, cos_cache, sin_cache, positions, scale)
 
 
 def fused_rope_hadamard_out(
@@ -86,7 +94,7 @@ def fused_rope_hadamard_out(
     scale: float = 128 ** -0.5,
 ) -> torch.Tensor:
     """Out-buffer fused interleaved RoPE + Hadamard transform for graph capture."""
-    _fused_rope_hadamard_cuda.fused_rope_hadamard_out(
+    _get_fused_rope_hadamard_cuda().fused_rope_hadamard_out(
         x,
         cos_cache,
         sin_cache,
