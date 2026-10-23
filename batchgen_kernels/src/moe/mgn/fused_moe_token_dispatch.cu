@@ -191,9 +191,14 @@ std::vector<torch::Tensor> fused_moe_token_dispatch_cuda(
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
     // Step 1: Count tokens per local expert
-    auto expert_counts = torch::zeros(
-        {num_local_experts},
+    // ExclusiveSum below reads E+1 inputs to produce offsets [0, ..., total].
+    // Give it a real zero sentinel; an E-element tensor is not a valid input
+    // even though the last exclusive output only depends on the first E values.
+    auto scan_counts = torch::zeros(
+        {num_local_experts + 1},
         torch::TensorOptions().dtype(torch::kInt32).device(global_x.device()));
+    // Preserve the public E-element counts shape and the dispatch counters.
+    auto expert_counts = scan_counts.narrow(0, 0, num_local_experts);
 
     const int threads = 256;
     const int blocks = std::min(65535, (int)((num_tokens * K + threads - 1) / threads));
@@ -216,7 +221,7 @@ std::vector<torch::Tensor> fused_moe_token_dispatch_cuda(
 
     cub::DeviceScan::ExclusiveSum(
         d_temp_storage, temp_storage_bytes,
-        expert_counts.data_ptr<int32_t>(),
+        scan_counts.data_ptr<int32_t>(),
         expert_offsets.data_ptr<int32_t>(),
         num_local_experts + 1,
         stream
@@ -229,7 +234,7 @@ std::vector<torch::Tensor> fused_moe_token_dispatch_cuda(
 
     cub::DeviceScan::ExclusiveSum(
         d_temp_storage, temp_storage_bytes,
-        expert_counts.data_ptr<int32_t>(),
+        scan_counts.data_ptr<int32_t>(),
         expert_offsets.data_ptr<int32_t>(),
         num_local_experts + 1,
         stream
