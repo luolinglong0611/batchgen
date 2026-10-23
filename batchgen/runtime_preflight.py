@@ -387,18 +387,18 @@ def _resolve_model_type(model: str) -> str:
 
 
 def _check_r1_sm103_runtime(server_args: object) -> RuntimeContract:
-    """Check the explicitly selected R1 precision migration before allocation."""
+    """Check the explicitly selected R1 eager diagnostic before allocation."""
     if getattr(server_args, "enable_cuda_graph", False) or getattr(
         server_args, "enable_prefix_cache", False
     ):
         raise RuntimePreflightError(
-            "R1 SM103 triton_precision is eager-only; CUDA graphs and prefix-cache reuse are unsupported"
+            "R1 SM103 diagnostics are eager-only; CUDA graphs and prefix-cache reuse are unsupported"
         )
     dispatch = _import_required(
         "batchgen.models.deepseek.deepseekv3.kernel_dispatch", origin=_ORIGIN_BATCHGEN
     )
     try:
-        dispatch.validate_sm103_environment()
+        implementation = dispatch.validate_sm103_environment()
     except (AttributeError, RuntimeError) as exc:
         raise RuntimePreflightError(f"R1 SM103 runtime selection failed: {exc}") from exc
     entries = {
@@ -406,16 +406,34 @@ def _check_r1_sm103_runtime(server_args: object) -> RuntimeContract:
             "mla_prefill_sm103_w8a16", "mla_prefill_sm103_w8a16_prepacked",
             "mla_decoding_sm103_bf16_with_pagekv",
         ),
-        "batchgen.attention.mla.triton_precision": ("varlen_prefill", "paged_mla_decode"),
     }
+    if implementation == "fa4_flashinfer":
+        versions = {
+            "flash-attn-4": "4.0.0b36", "flashinfer-python": "0.6.13",
+            "flashinfer-cubin": "0.6.13", "nvidia-cutlass-dsl": "4.8.1",
+        }
+        for distribution, expected in versions.items():
+            try:
+                actual = importlib.metadata.version(distribution)
+            except importlib.metadata.PackageNotFoundError as exc:
+                raise RuntimePreflightError(f"R1 fast diagnostic requires {distribution}=={expected}") from exc
+            if actual != expected:
+                raise RuntimePreflightError(f"R1 fast diagnostic requires {distribution}=={expected}, got {actual}")
+        entries.update({
+            "flash_attn.cute": ("flash_attn_varlen_func",),
+            "flashinfer.mla": ("trtllm_batch_decode_with_kv_cache_mla",),
+        })
+    else:
+        entries["batchgen.attention.mla.triton_precision"] = ("varlen_prefill", "paged_mla_decode")
     for name, entrypoints in entries.items():
-        module = _import_required(name, origin=_ORIGIN_BATCHGEN)
+        module = _import_required(name, origin=_ORIGIN_BATCHGEN if name.startswith("batchgen.") else _ORIGIN_SITE)
         for entrypoint in entrypoints:
             if not callable(getattr(module, entrypoint, None)):
                 raise RuntimePreflightError(f"{name} has no {entrypoint}()")
     logger.info(
-        "[runtime-preflight] r1_sm103_attention=triton_precision mode=eager_correctness "
-        "projection=triton_fp8_original_fp32_scales cuda=cu130 disable_mma_v5=1"
+        "[runtime-preflight] r1_sm103_attention=%s mode=eager_diagnostic "
+        "projection=triton_fp8_original_fp32_scales cuda=cu130 disable_mma_v5=1 "
+        "model_quality_qualified=false performance_qualified=false", implementation
     )
     return RuntimeContract(
         modules=("triton", "libucx"),

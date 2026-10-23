@@ -35,14 +35,16 @@ def digest(path):
     return h.hexdigest()
 
 
-def plan(root, rank, run_id):
+def plan(root, rank, run_id, attention_implementation='triton_precision'):
+    if attention_implementation not in ('triton_precision', 'fa4_flashinfer'):
+        raise ValueError('Only the two explicitly audited eager diagnostics are supported')
     toolkit = root / 'cuda130-packages/nvidia/cu13'
     env = {
         'CUDA_VISIBLE_DEVICES': '0,1,2,3,4,5,6,7',
         'CUDA_HOME': str(toolkit),
         'TRITON_PTXAS_PATH': str(toolkit / 'bin/ptxas'),
         'BATCHGEN_R1_SM103_EXPERIMENTAL': '1',
-        'BATCHGEN_R1_SM103_ATTENTION': 'triton_precision',
+        'BATCHGEN_R1_SM103_ATTENTION': attention_implementation,
         'DISABLE_MMA_V5': '1', 'TORCH_CUDA_CHANNEL': 'cu130',
         'BATCHGEN_W8A16_DEQUANT': '0',
         'BATCHGEN_HOST_REGISTER_CHUNK_GIB': '16',
@@ -52,6 +54,8 @@ def plan(root, rank, run_id):
         'PYTHONUNBUFFERED': '1', 'HF_HUB_OFFLINE': '1',
         'TRANSFORMERS_OFFLINE': '1',
     }
+    if attention_implementation == 'fa4_flashinfer':
+        env['BATCHGEN_R1_SM103_FAST_DIAGNOSTIC'] = '1'
     command = [str(root / 'env/bin/python'), '-m', 'batchgen.launch_http_server',
                '--model', MODEL,
                '--cache-dir', '/mnt/fuse/oss/luolinglong.lll/models/DeepSeek-R1-original-fp8',
@@ -240,7 +244,8 @@ def load_weights_evidence(root, rank, path, entries, converter_sha):
     if data.get('hostname') != HOSTS[rank] or data.get('status') not in ('exited', 'failed'):
         raise RuntimeError('Prior launch report must belong to this node and have terminated')
     cmd = data.get('command', [])
-    env, expected = plan(root, rank, path.parent.parent.name)
+    prior_implementation = data.get('environment', {}).get('BATCHGEN_R1_SM103_ATTENTION')
+    env, expected = plan(root, rank, path.parent.parent.name, prior_implementation)
     if cmd != expected or data.get('environment') != env:
         raise RuntimeError('Prior report does not match this diagnostic launch command/environment')
     if data.get('source_sha256', {}).get('batchgen/ckpt_converter/ckpt_converter.py') != converter_sha:
@@ -353,6 +358,8 @@ def main():
     parser.add_argument('--node-rank', type=int, choices=(0, 1), required=True)
     parser.add_argument('--root', type=Path, default=ROOT)
     parser.add_argument('--run-id', default='r1-diagnostic-v1')
+    parser.add_argument('--attention-implementation', choices=('triton_precision', 'fa4_flashinfer'),
+                        default='triton_precision', help='Explicit eager diagnostic only; neither choice implies model/performance qualification')
     parser.add_argument('--registration-qualification', type=Path,
                         help='Required for --execute: local passed native 675GiB/8worker/shifted-tensor report')
     parser.add_argument('--validated-weights-from', type=Path,
@@ -361,7 +368,7 @@ def main():
     args = parser.parse_args()
     if not args.run_id or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_' for c in args.run_id):
         parser.error('run-id must use letters, numbers, dash, underscore')
-    env, command = plan(args.root, args.node_rank, args.run_id)
+    env, command = plan(args.root, args.node_rank, args.run_id, args.attention_implementation)
     print(json.dumps({'mode': 'execute' if args.execute else 'plan', 'environment': env,
                       'cwd': str(args.root / 'repo'), 'command': command,
                       'scope': 'Full-model eager diagnostic; not a paper speedup measurement'}, indent=2), flush=True)
@@ -379,7 +386,9 @@ def main():
     report_dir = args.root / 'runs' / args.run_id / f'node{args.node_rank}'
     report_dir.mkdir(parents=True, exist_ok=False)
     state = {'status': 'validating', 'utc': datetime.now(timezone.utc).isoformat(),
-             'hostname': socket.gethostname(), 'environment': env, 'command': command}
+             'hostname': socket.gethostname(), 'environment': env, 'command': command,
+             'attention_implementation': args.attention_implementation,
+             'model_quality_qualified': False, 'performance_qualified': False}
     report = report_dir / 'launch.json'
     try:
         if args.validated_weights_from is not None:

@@ -12,21 +12,28 @@ import torch
 
 
 def validate_sm103_environment():
-    """Require an explicit eager correctness experiment and its compiler ABI."""
+    """Require an explicit eager diagnostic and its compiler ABI."""
     required = {
         "BATCHGEN_R1_SM103_EXPERIMENTAL": "1",
-        "BATCHGEN_R1_SM103_ATTENTION": "triton_precision",
         "DISABLE_MMA_V5": "1",
         "TORCH_CUDA_CHANNEL": "cu130",
     }
     for name, expected in required.items():
         if os.environ.get(name) != expected:
             raise RuntimeError(f"R1 SM103 requires explicit {name}={expected}")
+    implementation = os.environ.get("BATCHGEN_R1_SM103_ATTENTION")
+    if implementation not in ("triton_precision", "fa4_flashinfer"):
+        raise RuntimeError("R1 SM103 requires explicit BATCHGEN_R1_SM103_ATTENTION=triton_precision or fa4_flashinfer")
+    if implementation == "fa4_flashinfer" and os.environ.get("BATCHGEN_R1_SM103_FAST_DIAGNOSTIC") != "1":
+        raise RuntimeError(
+            "R1 SM103 BATCHGEN_R1_SM103_ATTENTION=fa4_flashinfer requires "
+            "BATCHGEN_R1_SM103_FAST_DIAGNOSTIC=1; numerical failures remain unresolved"
+        )
     if os.environ.get("BATCHGEN_W8A16_DEQUANT", "0") != "0":
         raise RuntimeError("R1 SM103 requires BATCHGEN_W8A16_DEQUANT=0 to preserve FP8 activation GEMM")
     if torch.version.cuda != "13.0":
         raise RuntimeError(f"R1 SM103 requires Torch CUDA 13.0 (cu130), got {torch.version.cuda!r}")
-    return "triton_precision"
+    return implementation
 
 
 def select_sm103_experiment(device):
@@ -84,7 +91,7 @@ def _unsupported_legacy_attention(self, *args, **kwargs):
 
 
 def bind_sm103_attention(module):
-    """Bind the explicitly requested high-precision eager experiment."""
+    """Bind the requested eager diagnostic; no implicit numerical qualification."""
     implementation_name = validate_sm103_environment()
     from batchgen.attention.mla.sm103_backend import (
         mla_prefill_sm103_w8a16,

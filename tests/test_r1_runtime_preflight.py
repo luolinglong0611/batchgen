@@ -60,7 +60,8 @@ class R1Preflight(unittest.TestCase):
         if name == 'libucx':
             return SimpleNamespace(load_library=lambda: self.calls.append('UCX-loaded'))
         entries = ('mla_prefill_sm103_w8a16', 'mla_prefill_sm103_w8a16_prepacked',
-                   'mla_decoding_sm103_bf16_with_pagekv', 'varlen_prefill', 'paged_mla_decode')
+                   'mla_decoding_sm103_bf16_with_pagekv', 'varlen_prefill', 'paged_mla_decode',
+                   'flash_attn_varlen_func', 'trtllm_batch_decode_with_kv_cache_mla')
         return SimpleNamespace(**{entry: lambda: None for entry in entries})
 
     def test_precision_runtime_checks_owned_entries_native_kernels_and_ucx_before_core(self):
@@ -152,6 +153,40 @@ class R1Preflight(unittest.TestCase):
                 self.assertIn(('batchgen_kernels.attention._C_gqa_mha_decode_bf16', 'batchgen'), self.calls)
                 self.assertNotIn(('batchgen_kernels.common._C_mgn_ops', 'batchgen'), self.calls)
                 self.assertNotIn(('batchgen.attention.mla.triton_precision', 'batchgen'), self.calls)
+
+    def enable_fast(self):
+        os.environ.update(BATCHGEN_R1_SM103_ATTENTION='fa4_flashinfer',
+                          BATCHGEN_R1_SM103_FAST_DIAGNOSTIC='1')
+        return {'flash-attn-4': '4.0.0b36', 'flashinfer-python': '0.6.13',
+                'flashinfer-cubin': '0.6.13', 'nvidia-cutlass-dsl': '4.8.1'}
+
+    def test_fast_diagnostic_checks_pinned_site_functions_and_actual_native_dependencies(self):
+        versions = self.enable_fast()
+        with patch.object(self.preflight.importlib.metadata, 'version', side_effect=versions.__getitem__):
+            self.preflight.run_runtime_preflight(self.args)
+        for name in ('flash_attn.cute', 'flashinfer.mla'):
+            self.assertIn((name, 'site'), self.calls)
+        self.assertNotIn(('batchgen.attention.mla.triton_precision', 'batchgen'), self.calls)
+        self.assertIn(('batchgen_kernels.common._C_mgn_ops', 'batchgen'), self.calls)
+        self.assertIn('core-AOT', self.calls)
+
+    def test_fast_versions_and_entrypoints_cannot_be_silently_substituted(self):
+        versions = self.enable_fast()
+        for distribution in versions:
+            with self.subTest(distribution=distribution):
+                invalid = dict(versions, **{distribution: 'wrong'})
+                self.calls.clear()
+                with patch.object(self.preflight.importlib.metadata, 'version', side_effect=invalid.__getitem__):
+                    with self.assertRaisesRegex(self.preflight.RuntimePreflightError, distribution):
+                        self.preflight.run_runtime_preflight(self.args)
+                self.assertNotIn('core-AOT', self.calls)
+        original = self.preflight._import_required
+        self.preflight._import_required = lambda name, **kwargs: (
+            SimpleNamespace() if name == 'flashinfer.mla' else original(name, **kwargs))
+        with patch.object(self.preflight.importlib.metadata, 'version', side_effect=versions.__getitem__):
+            with self.assertRaisesRegex(self.preflight.RuntimePreflightError, 'trtllm_batch_decode'):
+                self.preflight.run_runtime_preflight(self.args)
+        self.assertNotIn('core-AOT', self.calls)
 
 
 if __name__ == '__main__':

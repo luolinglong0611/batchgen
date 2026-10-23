@@ -46,6 +46,17 @@ class DiagnosticLaunchTest(unittest.TestCase):
         _, cmd = launch.plan(launch.ROOT, 0, 'contract-v1')
         self.assertTrue(set(token for token in cmd if token.startswith('--')) <= accepted)
 
+    def test_fast_plan_requires_explicit_choice_without_changing_weights_or_topology(self):
+        default_env, default_command = launch.plan(launch.ROOT, 0, 'contract-v1')
+        fast_env, fast_command = launch.plan(launch.ROOT, 0, 'contract-v1', 'fa4_flashinfer')
+        self.assertEqual(fast_command, default_command)
+        expected = dict(default_env, BATCHGEN_R1_SM103_ATTENTION='fa4_flashinfer',
+                        BATCHGEN_R1_SM103_FAST_DIAGNOSTIC='1')
+        self.assertEqual(fast_env, expected)
+        self.assertNotIn('BATCHGEN_R1_SM103_FAST_DIAGNOSTIC', default_env)
+        with self.assertRaises(ValueError):
+            launch.plan(launch.ROOT, 0, 'contract-v1', 'unreviewed_backend')
+
 
 class RegistrationEvidenceGateTest(unittest.TestCase):
     """Ephemeral fake files test validation only; never valid GPU evidence."""
@@ -243,6 +254,20 @@ class WeightValidationReuseTest(unittest.TestCase):
         self.write_report()
         records, _ = self.validate()
         self.assertTrue(all(r['binary_verification']['mode'] == 'full_sha256' for r in records))
+
+    def test_prior_fast_diagnostic_reuses_only_exact_recorded_plan(self):
+        env, cmd = launch.plan(self.root, 0, 'old', 'fa4_flashinfer')
+        self.report.update(environment=env, command=cmd)
+        self.write_report()
+        records, evidence = self.validate()
+        self.assertTrue(all(r['binary_verification']['mode'] == 'reused_exact_identity' for r in records))
+        self.assertEqual(evidence['prior_exit_code'], 1)
+        # Reuse is a weight identity cache, not a quality claim, and a missing
+        # explicit fast opt-in must not be accepted as a previously valid plan.
+        del self.report['environment']['BATCHGEN_R1_SM103_FAST_DIAGNOSTIC']
+        self.write_report()
+        with self.assertRaisesRegex(RuntimeError, 'environment'):
+            self.validate()
 
     def test_replaced_identical_binary_rehashes_and_corruption_fails(self):
         replacement = self.root / 'same-bytes'

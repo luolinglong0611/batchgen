@@ -752,8 +752,9 @@ class DeepseekV3ParallelStrategyManager:
 		sm103_experiment = select_sm103_experiment(self.engine_config.Basic_Config.device_torch)
 		if sm103_experiment:
 			logging.warning(
-				"R1 SM103 triton_precision eager correctness experiment enabled explicitly; "
-				"this is a migrated backend, not the paper's attention implementation"
+				"R1 SM103 %s eager diagnostic enabled explicitly; "
+				"model quality and performance are not qualified; this is a migrated backend",
+				os.environ.get("BATCHGEN_R1_SM103_ATTENTION"),
 			)
 		for layer_idx in range(len(self.model.model.layers)):
 			attn_module = self.model.model.layers[layer_idx].self_attn

@@ -120,6 +120,25 @@ class KernelDispatchTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Torch CUDA 13.0"):
                 self.dispatch.select_sm103_experiment("cuda:0")
 
+    def test_fast_attention_is_a_separate_explicit_unqualified_diagnostic(self):
+        os.environ.update(ENVIRONMENT, BATCHGEN_R1_SM103_ATTENTION="fa4_flashinfer")
+        with self.assertRaisesRegex(RuntimeError, "BATCHGEN_R1_SM103_FAST_DIAGNOSTIC"):
+            self.dispatch.validate_sm103_environment()
+        os.environ["BATCHGEN_R1_SM103_FAST_DIAGNOSTIC"] = "1"
+        backend = ModuleType(NEW)
+        for name in ("mla_prefill_sm103_w8a16", "mla_prefill_sm103_w8a16_prepacked",
+                     "mla_decoding_sm103_bf16_with_pagekv"):
+            setattr(backend, name, lambda self, *args: self)
+        layer = SimpleNamespace()
+        with patch.dict(sys.modules, {NEW: backend, LEGACY: None, "flash_mla": None, "deep_gemm": None}):
+            self.dispatch.bind_sm103_attention(layer)
+        self.assertEqual(layer._r1_attention_implementation, "fa4_flashinfer")
+        self.assertIs(layer.prefill_attn_w8a16(), layer)
+        self.assertIs(layer.decoding_attn_mode_3_bf16(), layer)
+        os.environ["BATCHGEN_R1_SM103_ATTENTION"] = "torch_fp64_reference"
+        with self.assertRaisesRegex(RuntimeError, "BATCHGEN_R1_SM103_ATTENTION"):
+            self.dispatch.validate_sm103_environment()
+
 
 if __name__ == "__main__":
     unittest.main()
