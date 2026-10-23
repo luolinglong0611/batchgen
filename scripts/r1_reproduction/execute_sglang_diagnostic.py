@@ -209,7 +209,7 @@ def validate_receipts(local, peer, rank, cohort, now, sources, config):
 def process_identity(pid):
     # comm can contain spaces and parentheses; numeric fields start after last ).
     fields = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
-    return {'pid': pid, 'state': fields[0], 'pgid': int(fields[2]),
+    return {'pid': pid, 'state': fields[0], 'pgid': int(fields[2]), 'sid': int(fields[3]),
             'starttime_ticks': int(fields[19])}
 
 
@@ -219,6 +219,7 @@ def same_group_leader(identity):
     except FileNotFoundError:
         return False
     return (current['pid'] == current['pgid'] == identity['pgid'] and
+            current['sid'] == identity['sid'] == identity['pid'] and
             current['starttime_ticks'] == identity['starttime_ticks'])
 
 
@@ -242,6 +243,28 @@ def live_group_members(identity):
     return members
 
 
+def live_session_members(identity):
+    """Audit all live members of this session, including detached PGIDs.
+
+    Do not signal these additional groups: their recorded identities allow the
+    parent to review and clean them separately. The leader must remain unreaped
+    throughout this snapshot, so its SID cannot be recycled during the audit.
+    """
+    if not same_group_leader(identity):
+        raise RuntimeError('Cannot audit session: unreaped leader identity changed')
+    members = []
+    for path in Path('/proc').iterdir():
+        if not path.name.isdigit():
+            continue
+        try:
+            item = process_identity(int(path.name))
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        if item['sid'] == identity['sid'] and item['state'] not in ('Z', 'X'):
+            members.append(item)
+    return sorted(members, key=lambda item: item['pid'])
+
+
 def child_exited(child):
     # WNOWAIT preserves leader identity for safe cleanup even after early exit.
     return os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
@@ -258,14 +281,34 @@ def stop_owned_group(child, identity, grace=TERM_GRACE_SECONDS):
     if remaining:
         signal_owned_group(identity, signal.SIGKILL)
         record['signals'].append('SIGKILL')
-    # A stuck uninterruptible process must be reported, never wait forever.
+    # Wait without reaping: the leader's PID/SID identity must remain pinned
+    # through the FINAL session audit, even when its own PGID is already empty.
+    exit_deadline = time.monotonic() + 10
+    exited = child_exited(child)
+    while not exited and time.monotonic() < exit_deadline:
+        time.sleep(0.1)
+        exited = child_exited(child)
+    record['session_audit_scope'] = (
+        'All live processes with original SID, including other PGIDs; '
+        'does not claim discovery of descendants that created a new SID')
+    record['session_audit_before_leader_reap'] = True
     try:
-        record['exit_code'] = child.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        record['exit_code'] = None
-    record['remaining_live_members'] = live_group_members(identity)
+        session_members = live_session_members(identity)
+        record['remaining_live_session_members'] = session_members
+        record['remaining_live_members'] = [
+            item for item in session_members if item['pgid'] == identity['pgid']]
+        record['remaining_live_other_pgid_members'] = [
+            item for item in session_members if item['pgid'] != identity['pgid']]
+        record['session_audit_complete'] = True
+    except Exception as exc:
+        record['session_audit_complete'] = False
+        record['session_audit_error'] = repr(exc)
+    # Reap only after the audit; no signals or identity-based scans after reap.
+    record['exit_code'] = child.wait(timeout=0) if exited else None
     record['finished_unix'] = time.time()
-    record['cleanup_complete'] = not record['remaining_live_members']
+    record['cleanup_complete'] = (record['session_audit_complete'] and exited and
+                                  not record['remaining_live_session_members'])
+    record['parent_cleanup_required'] = not record['cleanup_complete']
     return record
 
 
@@ -403,8 +446,8 @@ def execute(args, planner):
                                  stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                                  start_new_session=True)
         identity = process_identity(child.pid)
-        if identity['pid'] != identity['pgid']:
-            raise RuntimeError('Child did not acquire its own process group')
+        if not identity['pid'] == identity['pgid'] == identity['sid']:
+            raise RuntimeError('Child did not acquire its own process group and session')
         try:
             write_json(args.run_dir / 'child.json', identity, exclusive=True)
             return supervise(child, identity, args.run_dir, args.node_rank, lambda: stopping[0])

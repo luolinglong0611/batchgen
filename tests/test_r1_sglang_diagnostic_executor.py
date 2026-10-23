@@ -115,7 +115,7 @@ class ExecutorTests(unittest.TestCase):
             self.assertTrue((args.run_dir / 'prepare-failed.json').exists())
 
     def test_group_signal_rejects_pid_reuse(self):
-        identity = {'pid': 42, 'pgid': 42, 'starttime_ticks': 100}
+        identity = {'pid': 42, 'pgid': 42, 'sid': 42, 'starttime_ticks': 100}
         with patch.object(e, 'process_identity', return_value=dict(identity, starttime_ticks=101)), \
              patch.object(e.os, 'killpg') as kill:
             with self.assertRaisesRegex(RuntimeError, 'starttime'):
@@ -128,13 +128,67 @@ class ExecutorTests(unittest.TestCase):
     def test_cleanup_term_then_kill_only_owned_group(self):
         child = Mock()
         child.wait.return_value = -9
-        identity = {'pid': 42, 'pgid': 42, 'starttime_ticks': 100}
+        identity = {'pid': 42, 'pgid': 42, 'sid': 42, 'starttime_ticks': 100}
         with patch.object(e, 'signal_owned_group') as send, \
-             patch.object(e, 'live_group_members', side_effect=[[identity], [identity], []]):
+             patch.object(e, 'live_group_members', side_effect=[[identity], [identity]]), \
+             patch.object(e, 'child_exited', return_value=True), \
+             patch.object(e, 'live_session_members', return_value=[]):
             report = e.stop_owned_group(child, identity, grace=0)
         self.assertEqual([call.args for call in send.call_args_list],
                          [(identity, signal.SIGTERM), (identity, signal.SIGKILL)])
         self.assertTrue(report['cleanup_complete'])
+
+    def test_other_pgid_in_same_session_prevents_false_cleanup_success(self):
+        child = Mock()
+        child.wait.return_value = -15
+        identity = {'pid': 42, 'pgid': 42, 'sid': 42, 'starttime_ticks': 100}
+        compiler = {'pid': 84, 'pgid': 80, 'sid': 42, 'starttime_ticks': 110, 'state': 'S'}
+        events = []
+        def audit(unreaped):
+            self.assertEqual(unreaped, identity)
+            child.wait.assert_not_called()
+            events.append('session_audit')
+            return [compiler]
+        def reap(**kwargs):
+            events.append('reap')
+            self.assertEqual(kwargs, {'timeout': 0})
+            return -15
+        child.wait.side_effect = reap
+        with patch.object(e, 'signal_owned_group') as send, \
+             patch.object(e, 'live_group_members', return_value=[]), \
+             patch.object(e, 'child_exited', return_value=True), \
+             patch.object(e, 'live_session_members', side_effect=audit):
+            result = e.stop_owned_group(child, identity, grace=0)
+        self.assertFalse(result['cleanup_complete'])
+        self.assertTrue(result['parent_cleanup_required'])
+        self.assertEqual(result['remaining_live_members'], [])
+        self.assertEqual(result['remaining_live_other_pgid_members'], [compiler])
+        self.assertEqual(result['remaining_live_session_members'], [compiler])
+        self.assertEqual(events, ['session_audit', 'reap'])
+        send.assert_called_once_with(identity, signal.SIGTERM)
+
+    def test_session_scan_includes_other_pgid_excludes_other_sid_and_zombies(self):
+        identity = {'pid': 42, 'pgid': 42, 'sid': 42, 'starttime_ticks': 100, 'state': 'Z'}
+        compiler = {'pid': 84, 'pgid': 80, 'sid': 42, 'starttime_ticks': 110, 'state': 'S'}
+        foreign = dict(compiler, pid=90, sid=90)
+        zombie = dict(compiler, pid=85, state='Z')
+        table = {item['pid']: item for item in (identity, compiler, foreign, zombie)}
+        with patch.object(e.Path, 'iterdir', return_value=[Path('/proc')/str(pid) for pid in table]), \
+             patch.object(e, 'process_identity', side_effect=table.__getitem__):
+            self.assertEqual(e.live_session_members(identity), [compiler])
+
+    def test_failed_session_audit_is_never_cleanup_complete(self):
+        child = Mock()
+        child.wait.return_value = 0
+        identity = {'pid': 42, 'pgid': 42, 'sid': 42, 'starttime_ticks': 100}
+        with patch.object(e, 'signal_owned_group'), \
+             patch.object(e, 'live_group_members', return_value=[]), \
+             patch.object(e, 'child_exited', return_value=True), \
+             patch.object(e, 'live_session_members', side_effect=PermissionError('proc read denied')):
+            result = e.stop_owned_group(child, identity, grace=0)
+        self.assertFalse(result['cleanup_complete'])
+        self.assertFalse(result['session_audit_complete'])
+        self.assertIn('proc read denied', result['session_audit_error'])
 
     def test_marker_crosses_read_boundary_and_is_remembered(self):
         with tempfile.TemporaryDirectory() as directory:
