@@ -35,6 +35,7 @@ class DiagnosticLaunchTest(unittest.TestCase):
             self.assertEqual(env['BATCHGEN_W8A16_DEQUANT'], '0')
             self.assertEqual(env['BATCHGEN_ENABLE_ALL_TO_ALL'], '0')
             self.assertEqual(env['GLOO_SOCKET_IFNAME'], 'eth0')
+            self.assertEqual(env['NCCL_RAS_ENABLE'], '0')
             self.assertEqual(env['BATCHGEN_HOST_REGISTER_CHUNK_GIB'], '16')
 
     def test_only_current_http_cli_arguments(self):
@@ -275,6 +276,23 @@ class WeightValidationReuseTest(unittest.TestCase):
         # Reuse is a weight identity cache, not a quality claim, and a missing
         # explicit fast opt-in must not be accepted as a previously valid plan.
         del self.report['environment']['BATCHGEN_R1_SM103_FAST_DIAGNOSTIC']
+        self.write_report()
+        with self.assertRaisesRegex(RuntimeError, 'environment'):
+            self.validate()
+
+    def test_prior_pre_ras_workaround_requires_exact_frozen_launcher(self):
+        del self.report['environment']['NCCL_RAS_ENABLE']
+        self.write_report()
+        with self.assertRaisesRegex(RuntimeError, 'environment'):
+            self.validate()
+        self.report['launcher_source_sha256'] = {'launch_r1_diagnostic.py':
+            'aec80861e8bbdc2dafb81acad264148f652b1e28cb4b989da87ea44acdfeb12d'}
+        self.write_report()
+        records, evidence = self.validate()
+        self.assertTrue(evidence['legacy_pre_ras_workaround_weight_evidence'])
+        self.assertTrue(all(r['binary_verification']['mode'] == 'reused_exact_identity' for r in records))
+        self.assertEqual(launch.plan(self.root, 0, 'new')[0]['NCCL_RAS_ENABLE'], '0')
+        self.report['environment']['NCCL_RAS_ENABLE'] = '1'
         self.write_report()
         with self.assertRaisesRegex(RuntimeError, 'environment'):
             self.validate()

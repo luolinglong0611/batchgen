@@ -49,6 +49,9 @@ def plan(root, rank, run_id, attention_implementation='triton_precision'):
         'BATCHGEN_HOST_REGISTER_CHUNK_GIB': '16',
         'BATCHGEN_ENABLE_ALL_TO_ALL': '0', 'GLOO_SOCKET_IFNAME': 'eth0',
         'NCCL_SOCKET_IFNAME': 'eth0', 'NCCL_IB_GID_INDEX': '3',
+        # NCCL 2.27.7 RAS peers-update SIGSEGV observed before the first R1
+        # request. Keep collectives/RDMA enabled; disable only RAS telemetry.
+        'NCCL_RAS_ENABLE': '0',
         'NCCL_IB_HCA': '=' + ','.join(f'mlx5_bond_{i}:1' for i in range(8)),
         'PYTHONUNBUFFERED': '1', 'HF_HUB_OFFLINE': '1',
         'TRANSFORMERS_OFFLINE': '1',
@@ -245,6 +248,13 @@ def load_weights_evidence(root, rank, path, entries, converter_sha):
     cmd = data.get('command', [])
     prior_implementation = data.get('environment', {}).get('BATCHGEN_R1_SM103_ATTENTION')
     env, expected = plan(root, rank, path.parent.parent.name, prior_implementation)
+    legacy_ras_plan = (data.get('launcher_source_sha256', {}).get('launch_r1_diagnostic.py')
+                       == 'aec80861e8bbdc2dafb81acad264148f652b1e28cb4b989da87ea44acdfeb12d'
+                       and 'NCCL_RAS_ENABLE' not in data.get('environment', {}))
+    if legacy_ras_plan:
+        # The frozen pre-workaround launcher still proves unchanged weight
+        # identities. Accept precisely its old plan; never replay its settings.
+        env.pop('NCCL_RAS_ENABLE')
     if cmd != expected or data.get('environment') != env:
         raise RuntimeError('Prior report does not match this diagnostic launch command/environment')
     if data.get('source_sha256', {}).get('batchgen/ckpt_converter/ckpt_converter.py') != converter_sha:
@@ -261,6 +271,7 @@ def load_weights_evidence(root, rank, path, entries, converter_sha):
     evidence = {'report': str(path), 'report_sha256': hashlib.sha256(payload).hexdigest(),
                 'prior_status': data['status'], 'prior_exit_code': data.get('exit_code'),
                 'prior_error': data.get('error'), 'prior_validation_started_utc': data['utc'],
+                'legacy_pre_ras_workaround_weight_evidence': legacy_ras_plan,
                 'trust_scope': 'local launcher record and unchanged filesystem metadata; not signed evidence'}
     return {record['shard']: record for record in records}, evidence, started_ns
 
@@ -390,6 +401,9 @@ def main():
              'model_quality_qualified': False, 'performance_qualified': False}
     report = report_dir / 'launch.json'
     try:
+        from r1_launch_safety import (prepare_launch_safety,
+                                      assert_self_core_policy, preflight_local_disk)
+        state['launch_safety'] = prepare_launch_safety(args.root)
         if args.validated_weights_from is not None:
             state['requested_weight_reuse'] = {
                 'report': str(args.validated_weights_from.absolute()),
@@ -403,7 +417,7 @@ def main():
                                   for p in (args.root / 'repo/batchgen').rglob('*.py')}
         state['launcher_source_sha256'] = {
             name: digest(args.root / 'repo/scripts/r1_reproduction' / name)
-            for name in ('launch_r1_diagnostic.py', 'r1_launch_process.py')}
+            for name in ('launch_r1_diagnostic.py', 'r1_launch_process.py', 'r1_launch_safety.py')}
         state['network_environment'] = {k: v for k, v in os.environ.items() if k.startswith(('UCX_', 'NCCL_'))}
         state['status'] = 'launching'
         report.write_text(json.dumps(state, indent=2) + '\n')
@@ -413,6 +427,8 @@ def main():
         if digest(Path(qualified_core['core_engine_path'])) != qualified_core['core_engine_sha256']:
             raise RuntimeError('Native library changed while validating weights; rerun qualification')
         check_weight_identities(state['weights'])
+        state['pre_popen_core_policy'] = assert_self_core_policy()
+        state['pre_popen_local_disk'] = preflight_local_disk(args.root)
         # Normal entry point retains all version, native-origin, freshness and
         # tokenizer checks; no fabricated capability, fallback, or preflight skip.
         child = subprocess.Popen(command, cwd=args.root / 'repo', env=child_env,
@@ -438,6 +454,8 @@ def main():
         return code
     except BaseException as exc:
         state.update(status='failed', error=f'{type(exc).__name__}: {exc}')
+        if hasattr(exc, 'record'):
+            state['failed_prelaunch_check'] = exc.record
         raise
     finally:
         report.write_text(json.dumps(state, indent=2) + '\n')
