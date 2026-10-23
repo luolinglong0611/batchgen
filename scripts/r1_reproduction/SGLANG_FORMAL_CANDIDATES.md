@@ -471,4 +471,27 @@ started as `sglang-formal-B-v1` at21:03:20/24 UTC. Each node is a full TP8/DP8
 service with1024 running requests and16384 prefill tokens configured globally
 within that replica, retaining128 running requests and2048 prefill tokens per
 DP rank. Both use graph maximum128 and the same precision/source settings.
-Readiness, actual capacity and paired512-request results are still pending.
+Both original executors subsequently recorded actual health/model readiness,
+at21:09:20 UTC on node0 and21:12:54 UTC on node1. Each replica's server-info
+reply contained eight internal states, each reporting weight91.44,
+KV cache134.24, graph1.73 (source memory units), and2051072 token capacity.
+List positions alone do not establish native rank identities. Initialization
+logs separately contain graph-capture completion for all eight local ranks
+on each node. Capacity observation SHA256 is
+`ba26fb940c3aeafe89148411553644e8b01a60272592c382ee20585a34b7ea7f`.
+
+The readiness delay exposed a probe boundary issue: the installed health
+handler waits one second before checking generation progress, while the
+supervisor's HTTP timeout is also one second. An explicit five-second-timeout
+diagnostic returned health200 in1.004019438 seconds and models200 in0.002228811
+seconds. The original executor later obtained its own successful response;
+no ready file was fabricated or live source patched. Future launcher versions
+should allow time beyond the handler's one-second polling interval.
+
+The B known-answer12 run closed with eleven correct final answers and natural
+stops, but the second replica's Chinese ratio case reached2048 tokens while
+still thinking. This is a failed12/12 functional regression, preserved in
+[LONGER_CHAT_PROBE.md](LONGER_CHAT_PROBE.md), not evidence of general quality.
+The unchanged512-request input8192/output2048 performance pilot started at
+21:15:29 UTC with one excluded warmup per endpoint and256 measured requests
+per replica. Its performance result is pending; quality remains unqualified.

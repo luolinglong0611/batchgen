@@ -178,3 +178,33 @@ The final-answer review SHA256 is
 `80ce75ea602762cd09e96b050ff3c0ebe24169227b550f03c625155a6cba62d1`.
 This checks a small functional regression with graphs enabled; it does not
 establish general accuracy, all-rank coverage or erase the prior failed gates.
+
+## Two independent TP8 replicas: B-v1 regression
+
+At21:13:53 UTC on2026-10-23, the same twelve payloads were submitted in one
+12-worker client: copy0's six cases to node0 and copy1's six cases to node1.
+The run closed after56.61 seconds of guard wall time, which is not a benchmark
+measurement. Both original CPU identities exited normally without cleanup
+signals or recorded outstanding requests. All68 raw files were exported and
+verified, including both server-info documents.
+
+Eleven cases naturally stopped and gave correct final answers. Case08,
+the Chinese ratio question on node1, reached the2048-token cap with no textual
+or native `</think>` marker and no final answer. It repeatedly reconsidered
+whether to express3/5 as60%, ending mid-sentence. Correct numbers inside the
+reasoning do not satisfy the final-answer rubric. Therefore this regression
+fails the original12/12 requirement; no longer-cap retry replaces this result.
+All12 HTTP responses and native token/log-probability collections were valid,
+which is a separate transport result.
+
+Run SHA256 is
+`efa829e26191ef4bc0a94aa85caacc90c2808d6fe27597595978efdc3bc46f60`;
+guard SHA256 is
+`0347544f1c6b1619c76481e958d2ac14f00fbbc60f784d594e2b1d08cfb1f73f`;
+closed export SHA256 is
+`31d39c3ccac19aabd72bb6b0cf081798420ac36514b1d40be7a93203f7785019`.
+Independent review of all final answers and the complete failed reasoning has
+SHA256 `6b2aeacb2ce30b53b28366437af76b43b7177542f498ca22e52f882cb28803f6`.
+The result does not isolate a TP8 kernel defect, establish general quality,
+or revise any earlier numerical failure. Fixed-length throughput pilots are
+retained as performance diagnostics with this quality failure explicit.
