@@ -23,7 +23,12 @@ cd "$ROOT/repo"
   > "$ROOT/r1-diagnostic-v1-node0.log" 2>&1
 ```
 
-同 run-id 的节点结果目录已存在时拒绝重用；失败应保留证据并用 v2 等新名字重试。脚本转发 SIGINT/SIGTERM 给自己启动的进程组，等待 30 秒后仅清理该组；不杀其他任务。它不安装依赖、不设置 sysctl、不改 hugepages、不清 GPU/缓存。正常 HTTP 启动入口仍执行真实 runtime preflight，未跳过版本、native 来源、AOT freshness、tokenizer 校验。
+同 run-id 的节点结果目录已存在时拒绝重用；失败应保留证据并用 v2 等新名字重试。脚本以 WNOWAIT 保留自己直接启动的 HTTP 子进程。SIGINT/SIGTERM 首先只向该 HTTP 主进程发送一次 TERM，允许正常 worker/native 内存释放 300 秒；必要时仅向仍由原始未回收 leader 钉住的 primary PGID 升级 TERM/KILL。其他 PGID 仅审计，残留明确记录为需要实验负责人清理。完整结构化审计先保存，再回收子进程，之后不再发送数字 PID/PGID 信号。它不安装依赖、不设置 sysctl、不改 hugepages、不清 GPU/缓存。正常 HTTP 启动入口仍执行真实 runtime preflight，未跳过版本、native 来源、AOT freshness、tokenizer 校验。
+
+默认 attention 仍为 `triton_precision`。额外的 `--attention-implementation fa4_flashinfer`
+只用于显式开启的 eager 全模型诊断，完整条件与未通过的严格数值测试见
+[SM103_FAST_DIAGNOSTIC.md](SM103_FAST_DIAGNOSTIC.md)。成功启动、有限输出和诊断计时
+均不能覆盖这些失败或用于宣称论文加速比。
 
 ## Python 修复后复用已验证的权重证据
 
