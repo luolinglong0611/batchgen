@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "full_model_short_serial_and_concurrent_diagnostics_collected_not_quality_or_performance_pass",
+  "status": "batchgen_short_generation_collected_sglang_routing_compat_full_model_pending",
   "model": "deepseek-ai/DeepSeek-R1",
   "model_revision": "20f2865710d161dc4a32c4e8c3d7c42c7b9852f8",
   "paper_reference": {
@@ -120,7 +120,7 @@
       "triton_commit": "4caa0328bf8df64896dd5f6fb9df41b0eb2e750a",
       "cute_dsl": "4.3.0.dev0",
       "source": "https://github.com/sgl-project/sglang/blob/v0.5.5.post3/docker/Dockerfile",
-      "qualification": "installer running in isolated node0 environment; import and full-model correctness untested"
+      "qualification": "Installed on both nodes; dense/MLA/MoE diagnostics collected; stock full-model warmup failed routing None ABI; R1-only compatibility patch passed one-shard real apply check; complete model still pending"
     },
     "baseline_launch_candidate": [
       "--dtype",
@@ -823,5 +823,52 @@
     "original_hopper_or_sglang_full_layer_anchor_available": false,
     "scope_limit": "No derived error budget for composed BF16/FP8 requantization chain; old failed reports remain failed, not proof by themselves of an algorithmic bug",
     "independent_followup": "same-checkpoint SGLang diagnostics and separately specified held-out semantic/layout/quality checks; do not retroactively tune threshold"
+  },
+  "sglang_full_model_diagnostic": {
+    "baseline_identity": "sglang0.5.5.post3+R1-routing-compat",
+    "stock_v1": {
+      "weights_loaded_on_both_nodes": true,
+      "kv_dtype_observed": "bfloat16",
+      "ready": false,
+      "generation_requests_sent": 0,
+      "failure": "FlashInfer native arg17 routing_method_type expected int but got None from FusedMoE",
+      "node_exit_codes": [
+        -9,
+        3
+      ],
+      "cleanup_complete_both_nodes": true,
+      "node0_cleanup_note": "Parent stop after peer failure; supervisor TERM grace then own-group KILL; remaining sessions empty"
+    },
+    "compatibility": {
+      "source_commit": "e553fc1c52a74be0d8e75864e947f800ee1bd0a7",
+      "patched_deepseek_v2_sha256": "6fa332b6aad5017d336c50826ecac5e1aa8ff446821c5a860ba83f930234f835",
+      "scope": "Explicit opt-in, original grouped-sigmoid R1 config, flashinfer_trtllm, None only; preexisting enum0/non-None preserved",
+      "one_shard_real_apply": "Original failure reproduced; patched None path finite and elementwise equal to explicit DeepSeekV3 enum2, with unchanged weights/scales/input",
+      "full_model_qualified": false
+    },
+    "prepared_runs": {
+      "v2": "Expired receipt; no execution",
+      "v3": "node0 preflight rejected transient GPU4 630MiB; node1 receipt only; no execution",
+      "v4": "Fresh paired preflight started; no results yet"
+    },
+    "formal_performance_released": false
+  },
+  "mgn_dispatch_scan_fix": {
+    "commit": "17b9fcbc2a4f9cfb9a5d31c6cb8b7db99f6331bd",
+    "old_positive": {
+      "sanitizer_error": "CUB DeviceScanKernel 4-byte global read past 4-byte input allocation",
+      "exit_code": 86,
+      "errors": 5
+    },
+    "candidate_negative": {
+      "sanitizer_errors": 0,
+      "exit_code": 0,
+      "dispatch_executions": 20,
+      "scope": "Four meaningful native routing/mapping subcases repeated five times; not complete model correctness"
+    },
+    "candidate_wheel_sha256": "7df577f7d4cb0e0944806fb0e38275b92f8626589e167729bb39321632bfb015",
+    "candidate_extension_sha256": "0f535cbd3c3fda1f4678a4bdec316d083f6383c3ed7fefb1777b935c9f075b2a",
+    "production_deployed": false,
+    "cause_of_greedy_differences_established": false
   }
 }
