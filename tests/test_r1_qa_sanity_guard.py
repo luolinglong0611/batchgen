@@ -73,3 +73,15 @@ class QAGuardAdmissionTests(unittest.TestCase):
                 guard.execute(self.args, self.values, {})
         popen.assert_not_called()
         self.assertFalse(self.args.output.exists())
+
+    def test_cleanup_defers_repeated_stop_and_restores_handlers_on_error(self):
+        original = object()
+        with patch.object(guard.signal, 'getsignal', return_value=original), \
+             patch.object(guard.signal, 'signal') as change, \
+             patch.object(guard.ownership, 'stop_own_group', side_effect=RuntimeError('cleanup failure')):
+            with self.assertRaises(RuntimeError):
+                guard.cleanup_client(object(), {})
+        self.assertEqual(change.call_args_list[0].args, (guard.signal.SIGTERM, guard.signal.SIG_IGN))
+        self.assertEqual(change.call_args_list[1].args, (guard.signal.SIGINT, guard.signal.SIG_IGN))
+        self.assertEqual(change.call_args_list[2].args, (guard.signal.SIGTERM, original))
+        self.assertEqual(change.call_args_list[3].args, (guard.signal.SIGINT, original))

@@ -65,6 +65,18 @@ def service_current(admission):
     return ownership.same_identity(current, saved) and current['state'] not in ('Z', 'X')
 
 
+def cleanup_client(child, identity):
+    # A second stop request must not interrupt the first request's cleanup.
+    previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        for sig in previous:
+            signal.signal(sig, signal.SIG_IGN)
+        return ownership.stop_own_group(child, identity)
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
 def execute(args, admission, record):
     if socket.gethostname() != HOST or not Path('/.dockerenv').exists():
         raise RuntimeError('Only the allocated node0 container may execute')
@@ -112,7 +124,7 @@ def execute(args, admission, record):
                     record['stopped_reason'] = reason
                     break
                 time.sleep(2)
-            record['cleanup'] = ownership.stop_own_group(child, identity)
+            record['cleanup'] = cleanup_client(child, identity)
             cleaned = True
         record['exit_code'] = record['cleanup'].get('leader_exit_code')
         clean = not record['cleanup'].get('remaining_owned') and not record['cleanup'].get('remaining_session_members')
@@ -131,7 +143,7 @@ def execute(args, admission, record):
     finally:
         if child is not None and not cleaned:
             try:
-                record['cleanup'] = ownership.stop_own_group(child, identity)
+                record['cleanup'] = cleanup_client(child, identity)
             except BaseException:
                 record['cleanup_error'] = traceback.format_exc()
         record['finished_unix'] = time.time()
