@@ -36,6 +36,7 @@ import os
 from pathlib import Path
 import socket
 import sys
+import time
 import traceback
 from types import ModuleType, SimpleNamespace
 
@@ -53,6 +54,56 @@ SHAPES = {
     "kv_a_proj_with_mqa": (576, 7168), "kv_b_proj": (32768, 512),
     "o_proj": (7168, 16384),
 }
+PROFILES = {"small": [1, 63, 65], "standard": [1, 63, 64, 65, 129],
+            "context2048": [2048], "context8192": [8192]}
+
+
+def attention_tensor_names(layer_index):
+    if layer_index < 0 or layer_index >= 61:
+        raise ValueError("Original R1 layer index must be in [0, 61)")
+    prefix = f"model.layers.{layer_index}.self_attn."
+    return [prefix + name + suffix for name in SHAPES
+            for suffix in (".weight", ".weight_scale_inv")] + [
+                prefix + name + ".weight" for name in ("q_a_layernorm", "kv_a_layernorm")]
+
+
+def select_attention_shards(index, entries, layer_index):
+    """Select exactly twelve tensors; reject missing or unpinned index targets."""
+    selected = {}
+    for name in attention_tensor_names(layer_index):
+        filename = index["weight_map"][name]
+        if filename not in entries or not filename.endswith(".safetensors"):
+            raise ValueError(f"Unpinned attention shard: {filename}")
+        selected.setdefault(filename, []).append(name)
+    return selected
+
+
+def checkpoint_tensor_sources(args, result):
+    """Verify pinned index and only selected shards before mapping any tensors."""
+    from convert_verified_shards import (INDEX_NAME, MANIFEST_SHA256, WEIGHT_REVISION,
+                                         download_ready, read_json, validate_manifest, verify_source)
+
+    root, manifest = args.weights_root, args.weights_manifest
+    if not manifest or args.weights_shard or args.weights_sha256:
+        raise ValueError("--weights-root requires --weights-manifest and excludes single-shard arguments")
+    entries = validate_manifest(manifest)
+    if not download_ready(root, entries[INDEX_NAME]):
+        raise ValueError("Pinned checkpoint index lacks a verified download receipt")
+    verify_source(root / INDEX_NAME, entries[INDEX_NAME])
+    selected = select_attention_shards(read_json(root / INDEX_NAME), entries, args.layer_index)
+    shards = []
+    for filename, names in sorted(selected.items()):
+        if not download_ready(root, entries[filename]):
+            raise ValueError(f"Attention shard lacks a verified download receipt: {filename}")
+        emit({"event": "verify_attention_shard", "path": str(root / filename), "tensors": names})
+        verify_source(root / filename, entries[filename])
+        shards.append({"path": str(root / filename), "sha256": entries[filename]["Sha256"],
+                       "size": entries[filename]["Size"], "tensors": names})
+    result["weight_source"] = {"kind": "verified_checkpoint_attention_tensors", "root": str(root),
+                               "manifest_sha256": MANIFEST_SHA256, "revision": WEIGHT_REVISION,
+                               "index_sha256": entries[INDEX_NAME]["Sha256"],
+                               "layer_index": args.layer_index, "shards": shards}
+    return [(root / name, tensors) for name, tensors in sorted(selected.items())]
 
 
 def sha256_file(path):
@@ -126,24 +177,35 @@ def random_fp8_weight(shape, device):
 
 def load_weights(args, device, result):
     weights, scales, norms = {}, {}, {}
-    if args.weights_shard:
+    if getattr(args, "weights_root", None) or args.weights_shard:
         from safetensors import safe_open
 
-        if not args.weights_sha256 or len(args.weights_sha256) != 64:
-            raise ValueError("Checkpoint mode requires --weights-sha256 from the verified manifest")
-        actual_digest = sha256_file(args.weights_shard)
-        if actual_digest != args.weights_sha256.lower():
-            raise ValueError("Checkpoint shard SHA256 does not match the provided verified digest")
+        if getattr(args, "weights_root", None):
+            sources = checkpoint_tensor_sources(args, result)
+        else:
+            if not args.weights_sha256 or len(args.weights_sha256) != 64:
+                raise ValueError("Checkpoint mode requires --weights-sha256 from the verified manifest")
+            actual_digest = sha256_file(args.weights_shard)
+            if actual_digest != args.weights_sha256.lower():
+                raise ValueError("Checkpoint shard SHA256 does not match the provided verified digest")
+            sources = [(args.weights_shard, attention_tensor_names(args.layer_index))]
+            result["weight_source"] = {"kind": "checkpoint", "path": str(args.weights_shard),
+                                       "sha256": actual_digest, "layer_index": args.layer_index}
         prefix = f"model.layers.{args.layer_index}.self_attn."
-        with safe_open(str(args.weights_shard), framework="pt", device="cpu") as checkpoint:
-            for name in SHAPES:
-                weights[name] = checkpoint.get_tensor(prefix + name + ".weight").to(device)
-                scales[name + ".weight_scale_inv"] = checkpoint.get_tensor(prefix + name + ".weight_scale_inv").to(device)
-            for name in ("q_a_layernorm", "kv_a_layernorm"):
-                norms[name] = checkpoint.get_tensor(prefix + name + ".weight").to(device)
-        result["weight_source"] = {"kind": "checkpoint", "path": str(args.weights_shard),
-                                   "sha256": actual_digest, "layer_index": args.layer_index}
+        for path, names in sources:
+            with safe_open(str(path), framework="pt", device="cpu") as checkpoint:
+                for full_name in names:
+                    name = full_name[len(prefix):]
+                    tensor = checkpoint.get_tensor(full_name).to(device)
+                    if name.endswith(".weight_scale_inv"):
+                        scales[name] = tensor
+                    elif name.removesuffix(".weight") in SHAPES:
+                        weights[name.removesuffix(".weight")] = tensor
+                    else:
+                        norms[name.removesuffix(".weight")] = tensor
     else:
+        if getattr(args, "weights_manifest", None):
+            raise ValueError("--weights-manifest requires --weights-root")
         for name, shape in SHAPES.items():
             weights[name], scales[name + ".weight_scale_inv"] = random_fp8_weight(shape, device)
         norms = {name: (1 + 0.05 * torch.randn(size, device=device)).bfloat16()
@@ -244,6 +306,33 @@ def reference_rope(x, positions, cos, sin):
     return torch.stack((even * c - odd * s, even * s + odd * c), -1).flatten(-2).bfloat16()
 
 
+def reference_causal_attention_chunked(queries, keys, values, scale, *, head_chunk=8, query_chunk=64):
+    """Independent FP32 oracle, O(head_chunk * query_chunk * sequence) scratch.
+
+    Each query still sees all keys in a single FP32 softmax; no online/reduced
+    precision approximation is introduced. Only head/query scheduling changes.
+    This path is used for contexts >256, retaining the previous small oracle.
+    """
+    if head_chunk <= 0 or query_chunk <= 0:
+        raise ValueError("Oracle chunk dimensions must be positive")
+    length, heads, _ = queries.shape
+    output = torch.empty_like(values)
+    key_positions = torch.arange(length, device=queries.device)
+    for head_start in range(0, heads, head_chunk):
+        head_end = min(heads, head_start + head_chunk)
+        k = keys[:, head_start:head_end].float().transpose(0, 1)
+        v = values[:, head_start:head_end].float().transpose(0, 1)
+        for query_start in range(0, length, query_chunk):
+            query_end = min(length, query_start + query_chunk)
+            q = queries[query_start:query_end, head_start:head_end].float().transpose(0, 1)
+            scores = (q @ k.transpose(-1, -2)) * scale
+            positions = torch.arange(query_start, query_end, device=queries.device)
+            causal = key_positions[None, :] > positions[:, None]
+            probabilities = scores.masked_fill(causal, -torch.inf).softmax(-1)
+            output[query_start:query_end, head_start:head_end] = (probabilities @ v).transpose(0, 1).bfloat16()
+    return output
+
+
 class ReferenceLayer:
     def __init__(self, config, weights, scales, norms, cos, sin):
         self.config, self.weights, self.scales, self.norms = config, weights, scales, norms
@@ -275,6 +364,10 @@ class ReferenceLayer:
         keys = torch.cat((k_nope, k_pe.expand(-1, 128, -1)), -1)
         attended = torch.empty_like(values)
         for start, end in zip(boundaries, boundaries[1:]):
+            if end - start > 256:
+                attended[start:end] = reference_causal_attention_chunked(
+                    queries[start:end], keys[start:end], values[start:end], self.softmax_scale)
+                continue
             q, k, v = [tensor[start:end].float().transpose(0, 1) for tensor in (queries, keys, values)]
             scores = (q @ k.transpose(-1, -2)) * self.softmax_scale
             causal = torch.ones((end-start, end-start), dtype=torch.bool, device=hidden.device).triu(1)
@@ -364,6 +457,13 @@ def run(args, result):
         raise RuntimeError("SM103 CUDA device required")
     torch.cuda.set_device(args.device)
     device = torch.device("cuda", args.device)
+    memory_limit_gib = getattr(args, "memory_limit_gib", 64)
+    if memory_limit_gib <= 0:
+        raise ValueError("--memory-limit-gib must be positive")
+    total_memory = torch.cuda.get_device_properties(device).total_memory
+    allocation_limit = min(int(memory_limit_gib * 1024**3), total_memory)
+    torch.cuda.set_per_process_memory_fraction(allocation_limit / total_memory, device)
+    result["allocation_limit_bytes"] = allocation_limit
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
     torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = False
@@ -381,15 +481,18 @@ def run(args, result):
                                "fp8_quantization": sha256_file(ROOT / "batchgen_kernels/triton/fp8_quantize.py"),
                                "native_fused_rope": sha256_file(ROOT / "batchgen_kernels/triton/fused_rmsnorm_rope.py")}
     backend = isolated_backend()
-    if args.attention_implementation == "triton_precision":
+    if args.attention_implementation in ("triton_precision", "torch_fp64_reference"):
         precision = importlib.import_module("batchgen.attention.mla.triton_precision")
         result["source_sha256"]["triton_precision"] = sha256_file(PRECISION_SOURCE)
         result["derived_kernel_source_sha256"] = precision.SOURCE_PROVENANCE_SHA256
     weights, scales, norms = load_weights(args, device, result)
     layer = build_layer(config, weights, norms, device)
     layer._r1_attention_implementation = args.attention_implementation
-    lengths = [1, 63, 65] if args.profile == "small" else [1, 63, 64, 65, 129]
+    lengths = list(PROFILES[args.profile])
     result["lengths"] = lengths
+    result["reference_attention_scheduling"] = {
+        "dense_max_length": 256, "long_context_head_chunk": 8, "long_context_query_chunk": 64,
+        "softmax": "All keys in one FP32 softmax per query; no online approximation"}
     boundaries = [0]
     for length in lengths:
         boundaries.append(boundaries[-1] + length)
@@ -454,17 +557,22 @@ def run(args, result):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
-    parser.add_argument("--attention-implementation", choices=("fa4_flashinfer", "triton_precision"), default="fa4_flashinfer")
-    parser.add_argument("--profile", choices=("small", "standard"), default="small")
+    parser.add_argument("--attention-implementation", choices=("fa4_flashinfer", "triton_precision", "torch_fp64_reference"), default="fa4_flashinfer")
+    parser.add_argument("--profile", choices=tuple(PROFILES), default="small")
     parser.add_argument("--device", type=int, default=0)
     parser.add_argument("--decode-steps", type=int, default=3)
     parser.add_argument("--seed", type=int, default=20261023)
     parser.add_argument("--weights-shard", type=Path)
     parser.add_argument("--weights-sha256")
+    parser.add_argument("--weights-root", type=Path)
+    parser.add_argument("--weights-manifest", type=Path)
+    parser.add_argument("--memory-limit-gib", type=float, default=64)
     parser.add_argument("--layer-index", type=int, default=0)
     parser.add_argument("--expected-hostname")
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
+    if args.report and args.report.exists():
+        parser.error("Refusing to overwrite an existing qualification report")
     if args.decode_steps < 3:
         parser.error("At least three decode steps are required")
     result = {"status": "failed", "utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -476,6 +584,7 @@ def main():
               "scope": "One complete attention layer, synthetic paged-manager fixture, no scheduler/offload/model quality or performance claim",
               "compiler_environment": {name: os.environ.get(name) for name in ("TRITON_PTXAS_PATH", "DISABLE_MMA_V5", "CUDA_HOME")},
               "parameters": {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()}}
+    started = time.monotonic()
     try:
         with torch.inference_mode():
             run(args, result)
@@ -483,6 +592,7 @@ def main():
         result["error"] = {"type": type(exc).__name__, "message": str(exc)}
         traceback.print_exc(file=sys.stderr)
     finally:
+        result["elapsed_seconds_not_benchmark"] = time.monotonic() - started
         if args.report:
             args.report.parent.mkdir(parents=True, exist_ok=True)
             args.report.write_text(json.dumps(result, indent=2, allow_nan=False) + "\n")

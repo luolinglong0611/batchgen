@@ -1,13 +1,18 @@
 """Experimental eager R1 MLA primitives with IEEE probability/value accumulation.
 
-Kernel math derived without modification from the local, user-owned file
+Kernel math derived from the local, user-owned file
 batchgen/models/moonshotai/kimi_linear/mla_triton.py, SHA256:
 8d5beee05c932a89e4bec916d8f9a98cc0528f36e7d46daea20c5453d044403e
 (snapshot 2026-10-23). This module is self-contained; it neither imports nor
 modifies that file. Its own source hash must be qualified independently.
 
-BF16 Q/K/V and outputs, FP32 QK and IEEE FP32 P@V; prefill uses online FP32
-softmax, decode uses two passes with FP64 exp/denominator. Decode masks loads
+BF16 Q/K/V and outputs. Prefill retains FP32 QK, IEEE FP32 P@V and online
+FP32 softmax. Decode replaces the derived implementation with bounded two-pass
+FP64 QK/exp/denominator/probabilities/P@V, followed by a single BF16 rounding.
+FP64 P@V alone was insufficient: FP32 QK errors can also alter the rounding.
+This addresses an observed attention accumulation error
+crossing a BF16 midpoint and then changing a whole FP8 activation scale block.
+Decode masks loads
 of unused cache, including values, so NaN padding cannot enter P@V. This is a
 correctness candidate, not the paper's kernel or a throughput claim. Metadata
 validation synchronizes the GPU. Only SM103 eager execution is qualified in
@@ -82,91 +87,54 @@ def _decode(
     Q, CACHE, TABLE, LENGTHS, O,
     qs0, qs1, qs2, cs0, cs1, cs3, ts0, ts1,
     H: tl.constexpr, PAGES: tl.constexpr, MAX_PAGES: tl.constexpr,
-    SCALE: tl.constexpr, BH: tl.constexpr, BN: tl.constexpr,
+    SCALE: tl.constexpr, BN: tl.constexpr,
 ):
+    # One head per CTA: FP64 QK and PV use reductions, not tensor-core dots.
+    # Scratch is BN*1024 doubles, independent of the total context length.
     batch = tl.program_id(0)
-    heads = tl.program_id(1) * BH + tl.arange(0, BH)
+    head = tl.program_id(1)
     length = tl.load(LENGTHS + batch)
-    dv = tl.arange(0, 512)
-    dr = tl.arange(0, 64)
-    q_value = tl.load(
-        Q + batch * qs0 + heads[:, None] * qs1 + dv[None, :] * qs2,
-        heads[:, None] < H, other=0,
-    )
-    q_rope = tl.load(
-        Q + batch * qs0 + heads[:, None] * qs1 + (512 + dr[None, :]) * qs2,
-        heads[:, None] < H, other=0,
-    )
-    maximum = tl.full((BH,), -float("inf"), tl.float32)
-    # FP32 online rescaling errors can survive BF16 rounding and amplify through out_absorb.
-    denominator = tl.zeros((BH,), tl.float64)
+    dimensions = tl.arange(0, 1024)
+    values = tl.arange(0, 512)
+    query = tl.load(Q + batch * qs0 + head * qs1 + dimensions * qs2,
+                    dimensions < 576, other=0).to(tl.float64)
+    scale = tl.full((), SCALE, tl.float64)
+    maximum = tl.full((), -float("inf"), tl.float64)
+    denominator = tl.full((), 0.0, tl.float64)
     for start in range(0, length, BN):
-        keys = start + tl.arange(0, BN)
-        logical_pages = keys // 64
-        in_table = (keys < length) & (logical_pages < MAX_PAGES)
-        physical_pages = tl.load(
-            TABLE + batch * ts0 + logical_pages * ts1, in_table, other=-1,
-        )
-        valid_keys = in_table & (physical_pages >= 0) & (physical_pages < PAGES)
-        safe_pages = tl.where(valid_keys, physical_pages, 0).to(tl.int64)
-        addresses = safe_pages * cs0 + (keys % 64) * cs1
-        k_value = tl.load(
-            CACHE + addresses[None, :] + dv[:, None] * cs3,
-            valid_keys[None, :], other=0,
-        )
-        k_rope = tl.load(
-            CACHE + addresses[None, :] + (512 + dr[:, None]) * cs3,
-            valid_keys[None, :], other=0,
-        )
-        scores = tl.dot(q_value, k_value)
-        scores = tl.dot(q_rope, k_rope, scores) * SCALE
-        valid = (heads[:, None] < H) & valid_keys[None, :]
+        positions = start + tl.arange(0, BN)
+        logical_pages = positions // 64
+        in_table = (positions < length) & (logical_pages < MAX_PAGES)
+        physical_pages = tl.load(TABLE + batch * ts0 + logical_pages * ts1, in_table, other=-1)
+        valid = in_table & (physical_pages >= 0) & (physical_pages < PAGES)
+        safe_pages = tl.where(valid, physical_pages, 0).to(tl.int64)
+        addresses = safe_pages * cs0 + (positions % 64) * cs1
+        keys = tl.load(CACHE + addresses[:, None] + dimensions[None, :] * cs3,
+                       valid[:, None] & (dimensions[None, :] < 576), other=0).to(tl.float64)
+        scores = tl.sum(keys * query[None, :], axis=1) * scale
         scores = tl.where(valid, scores, -float("inf"))
-        new_maximum = tl.maximum(maximum, tl.max(scores, axis=1))
-        safe_maximum = tl.where(new_maximum == -float("inf"), 0.0, new_maximum)
-        correction = libdevice.exp(maximum.to(tl.float64) - safe_maximum.to(tl.float64))
-        probabilities = libdevice.exp(
-            scores.to(tl.float64) - safe_maximum[:, None].to(tl.float64),
-        )
-        denominator = denominator * correction + tl.sum(probabilities, axis=1)
+        new_maximum = tl.maximum(maximum, tl.max(scores, axis=0))
+        denominator = denominator * libdevice.exp(maximum - new_maximum)
+        denominator += tl.sum(libdevice.exp(scores - new_maximum), axis=0)
         maximum = new_maximum
-    maximum = tl.where(maximum == -float("inf"), 0.0, maximum)
-    denominator = tl.where(denominator > 0, denominator, 1.0)
-    accumulator = tl.zeros((BH, 512), tl.float32)
+    accumulator = tl.zeros((512,), tl.float64)
     for start in range(0, length, BN):
-        keys = start + tl.arange(0, BN)
-        logical_pages = keys // 64
-        in_table = (keys < length) & (logical_pages < MAX_PAGES)
-        physical_pages = tl.load(
-            TABLE + batch * ts0 + logical_pages * ts1, in_table, other=-1,
-        )
-        valid_keys = in_table & (physical_pages >= 0) & (physical_pages < PAGES)
-        safe_pages = tl.where(valid_keys, physical_pages, 0).to(tl.int64)
-        addresses = safe_pages * cs0 + (keys % 64) * cs1
-        k_value = tl.load(
-            CACHE + addresses[None, :] + dv[:, None] * cs3,
-            valid_keys[None, :], other=0,
-        )
-        k_rope = tl.load(
-            CACHE + addresses[None, :] + (512 + dr[:, None]) * cs3,
-            valid_keys[None, :], other=0,
-        )
-        scores = tl.dot(q_value, k_value)
-        scores = tl.dot(q_rope, k_rope, scores) * SCALE
-        valid = (heads[:, None] < H) & valid_keys[None, :]
+        positions = start + tl.arange(0, BN)
+        logical_pages = positions // 64
+        in_table = (positions < length) & (logical_pages < MAX_PAGES)
+        physical_pages = tl.load(TABLE + batch * ts0 + logical_pages * ts1, in_table, other=-1)
+        valid = in_table & (physical_pages >= 0) & (physical_pages < PAGES)
+        safe_pages = tl.where(valid, physical_pages, 0).to(tl.int64)
+        addresses = safe_pages * cs0 + (positions % 64) * cs1
+        keys = tl.load(CACHE + addresses[:, None] + dimensions[None, :] * cs3,
+                       valid[:, None] & (dimensions[None, :] < 576), other=0).to(tl.float64)
+        scores = tl.sum(keys * query[None, :], axis=1) * scale
         scores = tl.where(valid, scores, -float("inf"))
-        probabilities = (
-            libdevice.exp(scores.to(tl.float64) - maximum[:, None].to(tl.float64))
-            / denominator[:, None]
-        ).to(tl.float32)
-        accumulator = tl.dot(
-            probabilities, tl.trans(k_value).to(tl.float32), accumulator,
-            input_precision="ieee",
-        )
-    tl.store(
-        O + batch * H * 512 + heads[:, None] * 512 + dv[None, :],
-        accumulator.to(tl.bfloat16), heads[:, None] < H,
-    )
+        probabilities = libdevice.exp(scores - maximum) / denominator
+        v = tl.load(CACHE + addresses[:, None] + values[None, :] * cs3,
+                    valid[:, None], other=0).to(tl.float64)
+        accumulator += tl.sum(probabilities[:, None] * v, axis=0)
+    tl.store(O + batch * H * 512 + head * 512 + values, accumulator.to(tl.bfloat16))
 
 
 SOURCE_PROVENANCE_SHA256 = "8d5beee05c932a89e4bec916d8f9a98cc0528f36e7d46daea20c5453d044403e"
@@ -245,7 +213,7 @@ def varlen_prefill(
 
 
 def paged_mla_decode(
-    q, cache, block_table, lengths, *, softmax_scale, block_h=16, block_n=32,
+    q, cache, block_table, lengths, *, softmax_scale, block_h=16, block_n=16,
 ):
     """Q [B,H,576], cache [P,64,1,576] -> [B,H,512]; validates active pages."""
     _validate_float_inputs(q, cache)
@@ -260,18 +228,18 @@ def paged_mla_decode(
         raise ValueError("block_table must have shape [B,max_pages]")
     if lengths.shape != (q.shape[0],) or not lengths.is_contiguous():
         raise ValueError("lengths must be a contiguous [B] vector")
-    if block_h not in (16, 32) or block_n not in (32, 64):
-        raise ValueError("supported tiles: heads 16/32, keys 32/64")
+    if block_h != 16 or block_n not in (16, 32):
+        raise ValueError("FP64 decode uses one head per CTA; block_h must retain its default 16, keys 16/32")
     _validate_page_contents(block_table.tolist(), lengths.tolist(), cache.shape[0], block_table.shape[1])
     output = torch.empty((*q.shape[:2], 512), dtype=q.dtype, device=q.device)
     if q.shape[0] == 0:
         return output
     with torch.cuda.device(q.device):
-        _decode[(q.shape[0], triton.cdiv(q.shape[1], block_h))](
+        _decode[(q.shape[0], q.shape[1])](
             q, cache, block_table, lengths, output,
             *q.stride(), cache.stride(0), cache.stride(1), cache.stride(3),
             *block_table.stride(), H=q.shape[1], PAGES=cache.shape[0],
             MAX_PAGES=block_table.shape[1], SCALE=softmax_scale,
-            BH=block_h, BN=block_n, num_warps=8, num_stages=1,
+            BN=block_n, num_warps=8, num_stages=1,
         )
     return output

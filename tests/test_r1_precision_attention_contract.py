@@ -90,10 +90,21 @@ class DispatchContract(unittest.TestCase):
         self.assertEqual(calls, [(('q', 'k', 'v', 'cu', 65), {'softmax_scale': 0.125})])
 
     def test_precision_decode_adapts_only_singleton_query_dimension(self):
+        self.namespace['_decode_torch_fp64_reference'] = lambda *args: self.fail('Precision mode must stay Triton')
         with self.precision_module() as calls:
             result = self.namespace['_attend_decode'](self.layer, TensorLayout('query'), 'cache', 'table', 'lengths', 65)
         self.assertEqual(calls, [(('query.squeeze(1)', 'cache', 'table', 'lengths'), {'softmax_scale': 0.125})])
         self.assertEqual(result, 'latent.unsqueeze(1)')
+
+    def test_torch_fp64_diagnostic_requires_its_explicit_selection(self):
+        self.layer._r1_attention_implementation = 'torch_fp64_reference'
+        observed = []
+        self.namespace['_decode_torch_fp64_reference'] = lambda *args: observed.append(args) or 'diagnostic_output'
+        with self.precision_module() as calls:
+            result = self.namespace['_attend_decode'](self.layer, 'query', 'cache', 'table', 'lengths', 65)
+        self.assertEqual(result, 'diagnostic_output')
+        self.assertEqual(observed, [('query', 'cache', 'table', 'lengths', 0.125)])
+        self.assertEqual(calls, [])
 
 
 class TensorLayout:

@@ -7,6 +7,8 @@ complete-layer prefill/append/decode comparison before enabling this module.
 The independent precision candidate is selected only by setting the layer's
 _r1_attention_implementation to "triton_precision"; the default remains
 "fa4_flashinfer". The precision path imports neither FA4 nor FlashInfer.
+"torch_fp64_reference" is a separate diagnostic fallback: Triton prefill and
+bounded PyTorch FP64 decode. Production dispatch must never select it implicitly.
 All candidates require DISABLE_MMA_V5=1 before launch for SM103 Triton W8A8.
 
 This initial implementation is eager-only, with deliberately synchronous input
@@ -44,7 +46,7 @@ def _check_compiler_environment():
 
 def _attention_implementation(module):
     implementation = getattr(module, "_r1_attention_implementation", "fa4_flashinfer")
-    if implementation not in ("fa4_flashinfer", "triton_precision"):
+    if implementation not in ("fa4_flashinfer", "triton_precision", "torch_fp64_reference"):
         raise ValueError(f"Unknown R1 attention implementation: {implementation}")
     return implementation
 
@@ -119,7 +121,7 @@ def _validate_full_prefill_layout(boundaries, positions, tokens, sequences, max_
 
 
 def _attend_prefill(module, queries, keys, values, cu_seqlens, max_seqlen):
-    if _attention_implementation(module) == "triton_precision":
+    if _attention_implementation(module) in ("triton_precision", "torch_fp64_reference"):
         from .triton_precision import varlen_prefill
 
         return varlen_prefill(queries, keys, values, cu_seqlens, max_seqlen,
@@ -139,7 +141,39 @@ def _attend_prefill(module, queries, keys, values, cu_seqlens, max_seqlen):
     return output[0]
 
 
+def _decode_torch_fp64_reference(query, cache, table, lengths, scale):
+    """Diagnostic online FP64 decode with bounded scratch, one BF16 output cast.
+
+    The production wrapper has validated metadata. Head/key tiles bound scratch
+    independently of context length. This deliberately slow fallback helps
+    distinguish numerical errors from physical cache layout errors; it is not a
+    performance backend and never substitutes values into the independent oracle.
+    """
+    batch, _, heads, _ = query.shape
+    output = torch.empty((batch, 1, heads, 512), dtype=torch.bfloat16, device=query.device)
+    for row, length in enumerate(lengths.tolist()):
+        for head in range(0, heads, 16):
+            q = query[row, 0, head:head+16].double()
+            maximum = torch.full((q.shape[0], 1), -torch.inf, dtype=torch.float64, device=q.device)
+            denominator = torch.zeros_like(maximum)
+            accumulator = torch.zeros((q.shape[0], 512), dtype=torch.float64, device=q.device)
+            for start in range(0, length, 256):
+                positions = torch.arange(start, min(start+256, length), device=q.device)
+                keys = cache[table[row, positions // 64].long(), positions % 64, 0].double()
+                scores = (q @ keys.T) * scale
+                new_maximum = torch.maximum(maximum, scores.amax(-1, keepdim=True))
+                correction = torch.exp(maximum - new_maximum)
+                probabilities = torch.exp(scores - new_maximum)
+                denominator = denominator * correction + probabilities.sum(-1, keepdim=True)
+                accumulator = accumulator * correction + probabilities @ keys[:, :512]
+                maximum = new_maximum
+            output[row, 0, head:head+16] = (accumulator / denominator).bfloat16()
+    return output
+
+
 def _attend_decode(module, query, cache, table, lengths, max_seqlen):
+    if _attention_implementation(module) == "torch_fp64_reference":
+        return _decode_torch_fp64_reference(query, cache, table, lengths, module.softmax_scale)
     if _attention_implementation(module) == "triton_precision":
         from .triton_precision import paged_mla_decode
 
