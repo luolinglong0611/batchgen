@@ -270,6 +270,10 @@ class DeepSeekAttnWrapper(AttnWrapperBase):
             Tuple of (attn_output, attn_weights, kv_cache) to match decoder_layer's
             expected unpacking.
         """
+        AttnWrapperBase.retire_pending_prefill_offloads_before_layer(
+            self.layer_idx,
+            device=hidden_states.device,
+        )
         if self.prepack_mode:
             # Prepack mode: hidden_states is [1, total_tokens, hidden_dim]
             # Prepacked attention expects [total_tokens, hidden_dim]
@@ -335,13 +339,17 @@ class DeepSeekAttnWrapper(AttnWrapperBase):
             seq_global_id = [global_sequence_ids[seq_idx]]
 
             # MLA has no V (K contains compressed KV + k_pe)
-            self.core_engine.host_paged_kv_worker_view.async_offload_layer_kv_to_host(
+            task = self.core_engine.host_paged_kv_worker_view.async_offload_layer_kv_to_host(
                 layer_idx=self.layer_idx,
                 sequence_ids=seq_global_id,
                 k_tensor=seq_kv,
                 v_tensor=None,
                 sequence_lengths=[seq_len],
             )
+            # Keep source views alive until the shared retirement path waits
+            # for D2H completion and surfaces any KVAsyncTask exception.
+            AttnWrapperBase.pin_prefill_offload_tensor(seq_kv, self.layer_idx)
+            AttnWrapperBase.track_prefill_offload_task(task, self.layer_idx)
 
     def _forward_decode(self, hidden_states: torch.Tensor, **kwargs) -> Tuple:
         """Decode forward using FlashMLA backend.

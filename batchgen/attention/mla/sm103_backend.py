@@ -87,10 +87,30 @@ def w8a16_gemm(weight_data_fp8, weight_scale_inv_fp32, activation_bf16):
     of silently requantizing the model. It is not the paper's DeepGEMM backend.
     """
     _check_compiler_environment()
-    from batchgen.gemm.w8a8 import w8a8_gemm
-
     if activation_bf16.ndim not in (2, 3):
         raise ValueError("Expected a 2D or 3D activation")
+    if activation_bf16.dtype != torch.bfloat16:
+        raise ValueError("Expected BF16 activation")
+    if weight_data_fp8.ndim != 2 or weight_data_fp8.dtype != torch.float8_e4m3fn:
+        raise ValueError("Expected 2D E4M3FN FP8 weight")
+    n, k = weight_data_fp8.shape
+    if n <= 0 or k <= 0 or activation_bf16.shape[-1] != k:
+        raise ValueError("Expected positive weight dimensions and matching activation width")
+    if (weight_scale_inv_fp32.dtype != torch.float32
+            or weight_scale_inv_fp32.shape != ((n + 127) // 128, (k + 127) // 128)):
+        raise ValueError("Expected FP32 weight scales for 128x128 blocks")
+    device = activation_bf16.device
+    if (device.type != "cuda" or weight_data_fp8.device != device
+            or weight_scale_inv_fp32.device != device):
+        raise ValueError("Activation, weight and scales must share a CUDA device")
+    # Empty local decode ranks still participate in routed MoE collectives.
+    # Their shared expert has no rows; skip only its local GEMM, after checking
+    # the same tensor metadata as nonempty inputs. No quantizer/kernel import.
+    if activation_bf16.numel() == 0:
+        return activation_bf16.new_empty((*activation_bf16.shape[:-1], n))
+
+    from batchgen.gemm.w8a8 import w8a8_gemm
+
     x = activation_bf16.reshape(-1, activation_bf16.shape[-1])
     out = w8a8_gemm(*_quantize(x), weight_data_fp8, weight_scale_inv_fp32)
     return out.view(*activation_bf16.shape[:-1], out.shape[-1])

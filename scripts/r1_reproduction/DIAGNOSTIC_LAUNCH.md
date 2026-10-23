@@ -1,4 +1,4 @@
-# R1 双机加载与诊断启动（尚未执行）
+# R1 双机加载与诊断启动
 
 本入口用于实际完整权重加载、eager 正确性诊断；不代表 attention 已完成资格验证，也不能用于宣称论文加速比。当前 `triton_precision` 仍由独立完整层测试验证。先确保两个节点部署相同、经审查的源码，以及完成的 163 个转换分片，再由实验负责人启动。不要与单层测试、675 GiB 注册测试或基线服务争用资源。
 
@@ -93,3 +93,9 @@ cd "$ROOT/repo"
 固定既有MoE composition gate未调整：最大relative L2 **0.003106992**（阈值0.02），最大abs/reference RMS **0.02835883**（0.15），最小cosine **0.999995174**（0.9998）；router专家集合完全一致。独立参考保留原始FP32blockscales和activation FP8量化，并将每rank的BF16 partial以FP32求和，从而不继承被测BF16 reduction误差。Torch与PyNccl均NCCL2.27.7。
 
 测试脚本SHA256 `2907bc9aa09748ab516c2e8f2e920d09d5179b4e6e2c886770ee2ba93c040335`，两节点所有记录的源码hash一致。远端证据各在 `$ROOT/moe-ep-v1/rankNN.json`、同名 `.pt`、`supervisor.json` 与 `$ROOT/moe-ep-v1.log`；两个supervisor和16workers退出码均0，GPU进程列表再次确认空。每卡测试peak allocated为811243008bytes。该检查不覆盖shared expert、PSM加载、host DMA、attention或完整61层，也不提供推理性能结论。
+
+## 完整权重加载进展（2026-10-23）
+
+`r1-diagnostic-v3` 在两节点完成163分片的原生加载、675 GiB权重映射的8worker注册、64 GiB host KV注册和16rank共同barrier。两节点HTTP健康检查通过，workers状态均为serving/generation1/8workers。此时尚未执行模型core初始化或forward，不能据此宣称生成正确或论文性能复现成功。启动阶段观察到每节点约90–94 GiB可用主机内存；每worker还保留约19.3 GiB的反序列化skeleton，不应只按675+64预算运行峰值。
+
+此前v1的meta构造RoPE错误、v2的Path传入native字符串参数错误均保留原日志。元数据模型已修复为遵循ambient meta device；native路径桥接使用os.fsdecode，未修改权重数值或RoPE数学。两节点的完整权重哈希证据在v1生成，v2/v3按上述未变化身份规则复用。

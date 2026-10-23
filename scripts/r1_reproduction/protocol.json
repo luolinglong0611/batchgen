@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "full_model_startup_native_path_bridge_fix_pending",
+  "status": "full_weight_loading_and_worker_startup_passed_short_generation_pending",
   "model": "deepseek-ai/DeepSeek-R1",
   "model_revision": "20f2865710d161dc4a32c4e8c3d7c42c7b9852f8",
   "paper_reference": {
@@ -499,11 +499,11 @@
     "scope": "675GiB mapping with one shifted verified shard and zero padding; not full-model loading"
   },
   "full_model_reproduction": {
-    "weights_loaded": false,
+    "weights_loaded": true,
     "forward_executed": false,
     "performance_benchmark_executed": false,
     "speedup_established": false,
-    "status": "v2 exited at native Parameter_Server.Init argument binding on both nodes; metadata-only RoPE fixed and real61layer smoke passed; full weight loading not yet started",
+    "status": "v3 full163shard native weight loading and675GiB x8 worker registration completed on both nodes; HTTPhealthy16workers; core first-init and forward pending",
     "prior_failures": [
       {
         "run_id": "r1-diagnostic-v1",
@@ -515,6 +515,19 @@
         "phase": "DeepSeek_Parameter_Server.Init native bridge",
         "error": "converted_ckpt_dir passed as pathlib.Path; C++ pybind signature requires str"
       }
-    ]
+    ],
+    "successful_startup": {
+      "run_id": "r1-diagnostic-v3",
+      "workers_per_node": 8,
+      "nodes": 2,
+      "http_health": "healthy",
+      "generation": 1,
+      "restart_epoch": 0,
+      "observed_mem_available_gib": [
+        91.5,
+        94.15
+      ],
+      "evidence": "r1-diagnostic-v3.log and worker-restart-v1-before.json on each node; startup success is not generation or benchmark success"
+    }
   }
 }
