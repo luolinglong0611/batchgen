@@ -20,8 +20,8 @@ import traceback
 
 from launch_sglang_diagnostic import HOSTS, ROOT, plan
 
-CHILD_SHA = '2bb0d71ebb6c3d15040d6c814868f30ba84331545f86a44baa0110ab0161e942'
-LIMITS = {'seconds': 900, 'process_group_RSS_bytes': 8*1024**3,
+CHILD_SHA = '782bc4df0d7cf2b058795db986de4ca66314f2d67dcb332cfb87ba3278ac5f9a'
+LIMITS = {'seconds': 900, 'session_RSS_bytes': 8*1024**3,
           'target_GPU_bytes': 4*1024**3, 'MemAvailable_min_bytes': 64*1024**3}
 
 
@@ -58,14 +58,18 @@ def same_identity(current, saved):
         for k in ('pid', 'pgid', 'session', 'start_ticks'))
 
 
-def group_processes(pgid):
+def session_processes(sid):
     rows = []
     for path in Path('/proc').iterdir():
         if path.name.isdecimal():
             row = process_identity(int(path.name))
-            if row is not None and row['pgid'] == pgid:
+            if row is not None and row['session'] == sid:
                 rows.append(row)
     return rows
+
+
+def group_processes(pgid):
+    return [row for row in session_processes(pgid) if row['pgid'] == pgid]
 
 
 def child_exited(child):
@@ -85,14 +89,15 @@ def signal_owned_group(identity, sig):
 def violation(sample, elapsed):
     if elapsed > LIMITS['seconds']: return 'wall_time_limit'
     if sample['MemAvailable_bytes'] < LIMITS['MemAvailable_min_bytes']: return 'host_available_memory_limit'
-    if sample['process_group_RSS_bytes'] >= LIMITS['process_group_RSS_bytes']: return 'process_group_RSS_limit'
+    if sample['session_RSS_bytes'] >= LIMITS['session_RSS_bytes']: return 'session_RSS_limit'
     if sample.get('target_GPU_bytes', 0) >= LIMITS['target_GPU_bytes']: return 'target_GPU_memory_limit'
     if sample.get('unexpected_GPU_pids'): return 'unexpected_process_on_assigned_GPU'
     return None
 
 
 def stop_own_group(proc, identity, grace_seconds=15):
-    audit = {'signals': [], 'unverified_group_members': [], 'remaining_owned': []}
+    audit = {'signals': [], 'unverified_group_members': [], 'remaining_owned': [],
+             'remaining_session_members': []}
     if proc is None:
         return audit
     current = process_identity(proc.pid)
@@ -116,6 +121,10 @@ def stop_own_group(proc, identity, grace_seconds=15):
         audit['leader_exit_code'] = proc.wait(timeout=1)
     except subprocess.TimeoutExpired:
         audit['leader_wait_timeout'] = True
+    # Ninja may create a separate compiler PGID in the same session. Do not
+    # claim it was killed by the main-group signal; audit every live member.
+    audit['remaining_session_members'] = [r for r in session_processes(proc.pid)
+                                          if r['state'] not in ('Z', 'X')]
     return audit
 
 
@@ -184,9 +193,9 @@ def main():
             identity = process_identity(proc.pid)
             record['pid']=record['pgid']=proc.pid
             while not child_exited(proc):
-                processes=group_processes(proc.pid)
+                processes=session_processes(proc.pid)
                 sample={'elapsed_seconds':time.monotonic()-start,'MemAvailable_bytes':available(),
-                        'process_group_RSS_bytes':sum(p['RSS_bytes'] for p in processes)}
+                        'session_RSS_bytes':sum(p['RSS_bytes'] for p in processes)}
                 apps=gpu_apps(args.gpu)
                 pids={p['pid'] for p in processes}
                 sample.update(target_GPU_bytes=sum(p['bytes'] for p in apps),
@@ -224,7 +233,7 @@ def main():
         except BaseException as exc:
             record['cleanup_error']=f'{type(exc).__name__}: {exc}'
             record['status']='cleanup_failed'
-        if any(record.get('cleanup', {}).get(k) for k in ('remaining_owned', 'unverified_group_members', 'identity_capture_failed', 'leader_wait_timeout')):
+        if any(record.get('cleanup', {}).get(k) for k in ('remaining_owned', 'remaining_session_members', 'unverified_group_members', 'identity_capture_failed', 'leader_wait_timeout')):
             record['status_before_cleanup_audit'] = record['status']
             record['status'] = 'cleanup_requires_orphan_audit'
         record['finished_unix']=time.time()

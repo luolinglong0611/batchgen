@@ -188,11 +188,15 @@ def run_moe(args, report):
     for row in range(2):
         for slot,e in enumerate(ids[row].tolist()):
             upgate=xref[row] @ dequant(w13[e].cpu(),s13[e].cpu()).T
-            gate,up=upgate.chunk(2)
+            # FlashInfer native activationKernel: x1=first half (up),
+            # x2=second half (gate), output=silu(x2)*x1.
+            up,gate=upgate.chunk(2)
             intermediate=torch.nn.functional.silu(gate)*up
             reference[row] += (intermediate @ dequant(w2[e].cpu(),s2[e].cpu()).T)*weights[row,slot]
     report['moe_contract']={'E':E,'H':H,'I_per_TP_rank':I,'TP':16,'EP':1,'topk':TOPK,
         'w13':[E,2*I,H],'w2':[E,H,I],'weight_bytes':E*3*I*H,
+        'native_packed_w13_order':'up_then_gate (trtllm_fused_moe_dev_kernel.cu:134-138)',
+        'prior_v3_reference_layout':'invalid gate_then_up interpretation; prior metrics retained, superseded here',
         'scale_dtype':'float32','scale_block':[128,128],'power_of_two_only_scales':False,
         'routing_bias_dtype':'bfloat16 (matches SGLang correction_bias.to(x.dtype))',
         'routing_method':2,'reference_selected_experts':ids.tolist(),
@@ -215,15 +219,30 @@ def run_moe(args, report):
     compare(actual,reference,'moe_tp16_partial',report,args.output)
     # Exact algebraic invariant, independent of fused intermediate quantization:
     # no linear biases => zero activations must produce a zero MoE partial sum.
-    kwargs['hidden_states']=torch.zeros_like(xq)
-    zero=moe(**kwargs)
-    torch.cuda.synchronize()
-    compare(zero,torch.zeros(2,H),'moe_zero_input',report,args.output)
-    if torch.count_nonzero(zero).item()!=0:
-        raise AssertionError('Zero-input MoE invariant failed')
+    zero_failures=[]
+    zero_bf16=torch.zeros_like(x)
+    zero_q,zero_scales=per_token_group_quant_fp8(zero_bf16,128)
+    report['official_zero_quantizer']={'fp8_all_zero':bool((zero_q.float()==0).all()),
+        'scales_finite':bool(torch.isfinite(zero_scales).all()),
+        'scale_min':float(zero_scales.min()),'scale_max':float(zero_scales.max())}
+    for name,zero_input,activation_scales in (
+        ('existing_positive_scales',torch.zeros_like(xq),xs),
+        ('official_zero_quantizer',zero_q,zero_scales)):
+        kwargs['hidden_states']=zero_input
+        kwargs['hidden_states_scale']=activation_scales.t().contiguous()
+        zero=moe(**kwargs)
+        torch.cuda.synchronize()
+        try:
+            compare(zero,torch.zeros(2,H),'moe_zero_input_'+name,report,args.output)
+            if torch.count_nonzero(zero).item()!=0:
+                raise AssertionError('Zero-input MoE invariant failed: '+name)
+        except AssertionError as exc:
+            zero_failures.append(str(exc))
     if not all(torch.equal(a,b) for a,b in zip(original_scales,[s13,s2])):
-        raise AssertionError('FP32 scales changed after zero-input case')
-    report['zero_input_exact']=True
+        raise AssertionError('FP32 scales changed after zero-input cases')
+    report['zero_input_exact']=not zero_failures
+    if zero_failures:
+        raise AssertionError('; '.join(zero_failures))
 
 
 def main():

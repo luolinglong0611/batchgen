@@ -28,17 +28,22 @@ class GuardTest(unittest.TestCase):
                         self.assertEqual(guard.main(),0)
 
     def test_each_limit_is_fail_closed(self):
-        sample={'MemAvailable_bytes':128*1024**3,'process_group_RSS_bytes':1024**3,
+        sample={'MemAvailable_bytes':128*1024**3,'session_RSS_bytes':1024**3,
                 'target_GPU_bytes':1024**3,'unexpected_GPU_pids':[]}
         self.assertIsNone(guard.violation(sample,1))
         self.assertEqual(guard.violation(sample,901),'wall_time_limit')
         for key,value,reason in [
             ('MemAvailable_bytes',0,'host_available_memory_limit'),
-            ('process_group_RSS_bytes',8*1024**3,'process_group_RSS_limit'),
+            ('session_RSS_bytes',8*1024**3,'session_RSS_limit'),
             ('target_GPU_bytes',4*1024**3,'target_GPU_memory_limit'),
             ('unexpected_GPU_pids',[999],'unexpected_process_on_assigned_GPU'),
         ]:
             self.assertEqual(guard.violation({**sample,key:value},1),reason)
+
+    def setUp(self):
+        patcher = mock.patch.object(guard, 'session_processes', return_value=[])
+        self.session_scan = patcher.start()
+        self.addCleanup(patcher.stop)
 
     @staticmethod
     def row(pid=123, ticks=100, pgid=123):
@@ -114,6 +119,17 @@ class GuardTest(unittest.TestCase):
         attr_calls = [n.func.attr for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)]
         self.assertNotIn('poll', attr_calls)
         self.assertEqual(attr_calls.count('wait'), 1)
+
+    def test_separate_compiler_group_remains_explicit_audit(self):
+        compiler = {**self.row(pid=124), 'pgid': 124}
+        self.session_scan.return_value = [compiler]
+        with mock.patch.object(guard, 'process_identity', return_value=self.row()), \
+             mock.patch.object(guard, 'group_processes', return_value=[]), \
+             mock.patch.object(guard.os, 'killpg') as send:
+            audit = guard.stop_own_group(mock.Mock(pid=123), self.row(), grace_seconds=0)
+        send.assert_not_called()
+        self.assertEqual(audit['remaining_owned'], [])
+        self.assertEqual(audit['remaining_session_members'], [compiler])
 
     def test_gpu_query_has_five_second_deadline(self):
         with mock.patch.object(guard.subprocess, 'run', return_value=mock.Mock(stdout='')) as run:
