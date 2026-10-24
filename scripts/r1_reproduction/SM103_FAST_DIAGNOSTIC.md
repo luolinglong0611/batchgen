@@ -335,6 +335,18 @@ native join analysis SHA256 is
 | Corrected BG v7 | 0.416666667 | 0.620481676 |
 | Frozen SG-B96 | 0.447916667 | 0.637503584 |
 
+Each task below contains eight frozen questions with two draws per question.
+These per-task scores are descriptive small-subset observations.
+
+| Task | BG EM correct/16 | SG-B EM correct/16 | BG token F1 | SG-B token F1 |
+| --- | ---: | ---: | ---: | ---: |
+| 2wikimqa | 11 | 12 | 0.837500 | 0.875000 |
+| hotpotqa | 10 | 10 | 0.793448 | 0.802997 |
+| multifieldqa_en | 2 | 3 | 0.631100 | 0.671827 |
+| musique | 8 | 8 | 0.648504 | 0.632639 |
+| narrativeqa | 5 | 6 | 0.390278 | 0.452778 |
+| qasper | 4 | 4 | 0.422060 | 0.389780 |
+
 The BG-minus-SG paired differences are-3.125 percentage points EM and
 -1.702191 percentage points F1. The frozen10000-draw, task-stratified question
 bootstrap averages each question's two draws before resampling. Its descriptive
