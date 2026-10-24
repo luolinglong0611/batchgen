@@ -24,6 +24,9 @@ still need a separate integration change before this backend can be selected.
 from __future__ import annotations
 
 import os
+import logging
+import time
+from types import SimpleNamespace
 
 import torch
 
@@ -63,7 +66,10 @@ def _check_module(module, hidden_states):
         raise ValueError("This experimental backend is restricted to SM103")
     with torch.cuda.device(hidden_states.device):
         if torch.cuda.is_current_stream_capturing():
-            raise RuntimeError("R1 SM103 qualification backend is eager-only")
+            if not (_decode_optimization_enabled("BATCHGEN_R1_SM103_ALLOW_CAPTURE")
+                    and _decode_optimization_enabled("BATCHGEN_R1_SM103_ASYNC_VALIDATION")
+                    and _decode_optimization_enabled("BATCHGEN_R1_SM103_CACHE_ABSORB")):
+                raise RuntimeError("R1 SM103 capture requires explicit checked decode optimizations")
     if os.environ.get("BATCHGEN_W8A16_DEQUANT", "0") != "0":
         raise ValueError("R1 SM103 qualification requires the default FP8 activation GEMM path")
 
@@ -292,7 +298,26 @@ def _decode_workspace(module, device):
     return workspaces[key]
 
 
-def _validated_block_table(cache, table, lengths, batch, device):
+def _decode_optimization_enabled(name):
+    value = os.environ.get(name, "0")
+    if value not in ("0", "1"):
+        raise ValueError(f"{name} must be 0 or 1")
+    return value == "1"
+
+
+def _validate_decode_lengths(lengths, positions, max_seqlen, *, async_validation=False):
+    if async_validation:
+        valid = ((lengths == positions[:, 0] + 1)
+                 & (lengths > 0) & (lengths <= max_seqlen)).all()
+        torch._assert_async(valid, "Invalid R1 decode sequence lengths/positions")
+    else:
+        if not bool((lengths == positions[:, 0] + 1).all()) or not bool((lengths > 0).all()):
+            raise ValueError("cache_seqlens must include the current token; write positions are zero-based")
+        if max_seqlen < int(lengths.max()):
+            raise ValueError("max_seqlen is smaller than a sequence length")
+
+
+def _validated_block_table(cache, table, lengths, batch, device, *, async_validation=False):
     if cache.ndim != 4 or cache.shape[1:] != (64, 1, 576):
         raise ValueError("Expected MLA cache[physical_pages,64,1,576]")
     if cache.dtype != torch.bfloat16 or cache.device != device or not cache.is_contiguous():
@@ -300,17 +325,147 @@ def _validated_block_table(cache, table, lengths, batch, device):
     if table.ndim != 2 or table.shape[0] != batch or table.dtype != torch.int32 or table.device != device:
         raise ValueError("Page table must be int32[B,max_pages] on the activation device")
     pages_per_sequence = (lengths + 63) // 64
-    if int(pages_per_sequence.max()) > table.shape[1]:
-        raise ValueError("Page table does not cover the current decode token")
     used = torch.arange(table.shape[1], device=device)[None, :] < pages_per_sequence[:, None]
-    if not bool(((table[used] >= 0) & (table[used] < cache.shape[0])).all()):
-        raise ValueError("Active page table contains an invalid physical page")
+    if async_validation:
+        # Boolean indexing creates a dynamically sized CUDA result and forces
+        # a host synchronization even without an explicit .item(). Keep every
+        # value check, but assert on the producing stream before cache access.
+        # Invalid metadata invalidates the CUDA context; the worker's existing
+        # error/cleanup path must terminate the run, never return a response.
+        covered = (pages_per_sequence <= table.shape[1]).all()
+        valid_pages = (((table >= 0) & (table < cache.shape[0])) | ~used).all()
+        torch._assert_async(covered & valid_pages, "Invalid R1 decode physical page table")
+    else:
+        if int(pages_per_sequence.max()) > table.shape[1]:
+            raise ValueError("Page table does not cover the current decode token")
+        if not bool(((table[used] >= 0) & (table[used] < cache.shape[0])).all()):
+            raise ValueError("Active page table contains an invalid physical page")
     # TRTLLM 0.6.13 requires width divisible by 128/page_size. Invalid unused
     # sentinels are replaced only in this private view; manager storage is intact.
     safe = torch.where(used, table, 0)
     if safe.shape[1] % 2:
         safe = torch.cat((safe, safe.new_zeros((batch, 1))), dim=1)
     return safe.contiguous()
+
+
+def _decode_absorbed_weights(module, scales, *, cache_enabled=False):
+    from batchgen_kernels.triton.fp8_quantize import deepseek_v3_dequantization
+
+    weight = module.kv_b_proj.weight
+    scale = scales["kv_b_proj.weight_scale_inv"]
+    key = None
+    if cache_enabled:
+        try:
+            # A strong detached alias below keeps the old storage alive, so a
+            # replacement cannot reuse its address and match a stale entry.
+            # Unversioned inference tensors cannot support the mutation check.
+            key = tuple((t.data_ptr(), t._version, tuple(t.shape), tuple(t.stride()), t.dtype, t.device)
+                        for t in (weight, scale))
+        except RuntimeError:
+            key = None
+    if key is not None:
+        stream = torch.cuda.current_stream(weight.device).cuda_stream
+        entries = getattr(module, "_r1_sm103_absorbed_weight_cache", None)
+        if entries is None:
+            entries = {}
+            module._r1_sm103_absorbed_weight_cache = entries
+        entry = entries.get(stream)
+        if entry is not None and entry[0] == key:
+            return entry[3]
+    # Same kernel, dtype and layout as the original per-token computation.
+    absorb = deepseek_v3_dequantization(weight, scale).view(128, 256, 512)
+    if key is not None:
+        entries[stream] = (key, weight.detach(), scale.detach(), absorb)
+    return absorb
+
+
+def _decode_query_kv(module, hidden_states, positions, scales, cos, sin, absorb):
+    from batchgen.attention.mla.rotary_embedding import rotary_pos_emb_interleaved_native
+
+    batch = hidden_states.shape[0]
+    x = _quantize(hidden_states.squeeze(1))
+    q = _project_decode(module, "q_a_proj", x, scales)
+    new_kv = _project_decode(module, "kv_a_proj_with_mqa", x, scales).view(batch, 1, 576)
+    q = _project_decode(module, "q_b_proj", _quantize(module.q_a_layernorm(q)), scales)
+    q_nope, q_pe = q.view(batch, 128, 1, 192).split((128, 64), dim=-1)
+    q_pe = rotary_pos_emb_interleaved_native(q_pe.contiguous(), cos, sin, positions, 1)
+    latent = module.kv_a_layernorm(new_kv[..., :512])
+    k_pe = rotary_pos_emb_interleaved_native(
+        new_kv[..., 512:].unsqueeze(1), cos, sin, positions, 1,
+    ).squeeze(1)
+    k_tensor = torch.cat((latent, k_pe), dim=-1).view(batch, 1, 1, 576)
+    latent_query = torch.einsum("bhd,hdc->bhc", q_nope.squeeze(2), absorb[:, :128])
+    query = torch.cat((latent_query, q_pe.squeeze(2)), dim=-1).unsqueeze(1).contiguous()
+    return query, k_tensor
+
+
+def _decode_output(module, attn_out, scales, absorb):
+    batch = attn_out.shape[0]
+    output = torch.einsum("bqhc,hdc->bqhd", attn_out, absorb[:, 128:]).reshape(batch, 128 * 128)
+    output = _project_decode(module, "o_proj", _quantize(output), scales)
+    return output.view(batch, 1, -1)
+
+
+def _projection_graph_entry(module, hidden_states, positions, scales):
+    """Capture only projections; keep the actual attention launch unchanged.
+
+    One shape per layer bounds graph-pool growth as continuous batches shrink.
+    Static outputs are never returned directly: asynchronous host KV offload
+    must retain a distinct allocation while later tokens replay these graphs.
+    """
+    source_tensors = [getattr(module, name).weight for name in
+                      ("q_a_proj", "q_b_proj", "kv_a_proj_with_mqa", "kv_b_proj", "o_proj",
+                       "q_a_layernorm", "kv_a_layernorm")]
+    source_tensors += [scales[name] for name in sorted(scales)]
+    source_tensors += [module.rotary_emb.cos_cached, module.rotary_emb.sin_cached]
+    try:
+        sources = tuple((t.data_ptr(), t._version, tuple(t.shape), tuple(t.stride()), t.dtype, t.device)
+                        for t in source_tensors)
+    except RuntimeError as error:
+        raise RuntimeError("R1 projection graphs require versioned immutable decode weights") from error
+    current = torch.cuda.current_stream(hidden_states.device)
+    key = (tuple(hidden_states.shape), hidden_states.dtype, hidden_states.device,
+           positions.dtype, current.cuda_stream, sources)
+    entry = getattr(module, "_r1_sm103_projection_graph_entry", None)
+    if entry is not None and entry.key == key:
+        return entry
+    started = time.perf_counter()
+    entry = SimpleNamespace(key=key, aliases=[t.detach() for t in source_tensors],
+                            hidden=torch.empty_like(hidden_states), positions=torch.empty_like(positions),
+                            attn=torch.zeros((hidden_states.shape[0],1,128,512),
+                                             device=hidden_states.device,dtype=torch.bfloat16))
+    # The fixed RoPE table supplies identical per-position values. Crucially,
+    # FlashInfer still receives each call's exact max_seqlen outside the graph;
+    # rounding that bound changed a tested output and is deliberately avoided.
+    entry.cos, entry.sin = module.rotary_emb(hidden_states, seq_len=32768)
+    entry.absorb = _decode_absorbed_weights(module, scales, cache_enabled=True)
+    entry.hidden.copy_(hidden_states)
+    entry.positions.copy_(positions)
+    stream = getattr(module, "_r1_sm103_projection_capture_stream", None)
+    if stream is None:
+        stream = torch.cuda.Stream(device=hidden_states.device)
+        module._r1_sm103_projection_capture_stream = stream
+    stream.wait_stream(current)
+    with torch.cuda.stream(stream):
+        for _ in range(3):
+            _decode_query_kv(module,entry.hidden,entry.positions,scales,entry.cos,entry.sin,entry.absorb)
+            _decode_output(module,entry.attn,scales,entry.absorb)
+    current.wait_stream(stream)
+    entry.pre, entry.post = torch.cuda.CUDAGraph(), torch.cuda.CUDAGraph()
+    with torch.cuda.graph(entry.pre,stream=stream):
+        entry.query, entry.kv = _decode_query_kv(
+            module,entry.hidden,entry.positions,scales,entry.cos,entry.sin,entry.absorb)
+    with torch.cuda.graph(entry.post,stream=stream):
+        entry.output = _decode_output(module,entry.attn,scales,entry.absorb)
+    entry.capture_seconds = time.perf_counter()-started
+    module._r1_sm103_projection_graph_entry = entry
+    stats = getattr(module,"_r1_sm103_projection_graph_stats",None)
+    if stats is None:
+        stats = {"captures":0,"capture_seconds":0.,"replays":0}
+        module._r1_sm103_projection_graph_stats = stats
+    stats["captures"] += 1
+    stats["capture_seconds"] += entry.capture_seconds
+    return entry
 
 
 @torch.inference_mode()
@@ -332,13 +487,9 @@ def mla_decoding_sm103_bf16_with_pagekv(
         raise ValueError("Expected integer q_position_ids[B,1] on the activation device")
     if cache_seqlens.shape != (batch,) or cache_seqlens.dtype != torch.int32 or cache_seqlens.device != device:
         raise ValueError("Expected int32 cache_seqlens[B] on the activation device")
-    if not bool((cache_seqlens == q_position_ids[:, 0] + 1).all()) or not bool((cache_seqlens > 0).all()):
-        raise ValueError("cache_seqlens must include the current token; write positions are zero-based")
-    if max_seqlen < int(cache_seqlens.max()):
-        raise ValueError("max_seqlen is smaller than a sequence length")
-
-    from batchgen_kernels.triton.fp8_quantize import deepseek_v3_dequantization
-    from batchgen.attention.mla.rotary_embedding import rotary_pos_emb_interleaved_native
+    async_validation = _decode_optimization_enabled("BATCHGEN_R1_SM103_ASYNC_VALIDATION")
+    _validate_decode_lengths(cache_seqlens, q_position_ids, max_seqlen,
+                              async_validation=async_validation)
 
     cache, _, table = gpu_paged_kv_manager.get_layer_kv_with_page_table(layer_idx=layer_idx)
     if batch_slice is not None:
@@ -346,41 +497,42 @@ def mla_decoding_sm103_bf16_with_pagekv(
         if start < 0 or end - start != batch or end > table.shape[0]:
             raise ValueError("Invalid decode microbatch slice")
         table = table[start:end]
-    table = _validated_block_table(cache, table, cache_seqlens, batch, device)
-    x = _quantize(hidden_states.squeeze(1))
-    q = _project_decode(self, "q_a_proj", x, weight_scale)
-    new_kv = _project_decode(self, "kv_a_proj_with_mqa", x, weight_scale).view(batch, 1, 576)
-    q = _project_decode(self, "q_b_proj", _quantize(self.q_a_layernorm(q)), weight_scale)
-    q_nope, q_pe = q.view(batch, 128, 1, 192).split((128, 64), dim=-1)
-    q_pe = q_pe.contiguous()
-    cos, sin = self.rotary_emb(q_pe, seq_len=max_seqlen)
-    if cos.shape[0] < max_seqlen or sin.shape != cos.shape:
-        raise ValueError("RoPE cache does not cover the requested sequence length")
-    # Use the same FP32 rotation boundary as prefill. The legacy fused kernel
-    # performs BF16 products before addition when its cos/sin cache is BF16;
-    # that is a different rounding contract and changes the appended cache.
-    q_pe = rotary_pos_emb_interleaved_native(q_pe, cos, sin, q_position_ids, 1)
-    latent = self.kv_a_layernorm(new_kv[..., :512])
-    k_pe = rotary_pos_emb_interleaved_native(
-        new_kv[..., 512:].unsqueeze(1), cos, sin, q_position_ids, 1,
-    ).squeeze(1)
-    offload_kv = torch.cat((latent, k_pe), dim=-1)
-    k_tensor = offload_kv.view(batch, 1, 1, 576)
+    table = _validated_block_table(cache, table, cache_seqlens, batch, device,
+                                   async_validation=async_validation)
+    projection_graphs = _decode_optimization_enabled("BATCHGEN_R1_SM103_PROJECTION_GRAPHS")
+    entry = None
+    if projection_graphs:
+        if not async_validation or not _decode_optimization_enabled("BATCHGEN_R1_SM103_CACHE_ABSORB"):
+            raise ValueError("R1 projection graphs require async validation and guarded absorbed-weight caching")
+        if max_seqlen <= 32768:
+            previous = getattr(self,"_r1_sm103_projection_graph_entry",None)
+            entry = _projection_graph_entry(self,hidden_states,q_position_ids,weight_scale)
+            if layer_idx == 0 and entry is not previous:
+                logging.info("R1 projection graphs captured layer0 batch=%s seconds=%.3f",
+                             batch,entry.capture_seconds)
+    absorb = _decode_absorbed_weights(
+        self,weight_scale,cache_enabled=_decode_optimization_enabled("BATCHGEN_R1_SM103_CACHE_ABSORB"))
+    if entry is not None:
+        entry.hidden.copy_(hidden_states)
+        entry.positions.copy_(q_position_ids)
+        entry.pre.replay()
+        query,k_tensor = entry.query,entry.kv
+    else:
+        cos,sin = self.rotary_emb(hidden_states,seq_len=max_seqlen)
+        if cos.shape[0] < max_seqlen or sin.shape != cos.shape:
+            raise ValueError("RoPE cache does not cover the requested sequence length")
+        query,k_tensor = _decode_query_kv(self,hidden_states,q_position_ids,weight_scale,cos,sin,absorb)
     gpu_paged_kv_manager.update_layer_decode_new_token(
         k_tensor=k_tensor, v_tensor=None,
         sequence_lengths=q_position_ids[:, 0].to(torch.int32).contiguous(),
         layer_idx=layer_idx, batch_slice=batch_slice,
     )
-    # Do not persist expanded weights: BatchGen can replace a layer's parameter
-    # storage while streaming. kv_b has both dimensions divisible by 128.
-    absorb = deepseek_v3_dequantization(
-        self.kv_b_proj.weight, weight_scale["kv_b_proj.weight_scale_inv"],
-    ).view(128, 256, 512)
-    latent_query = torch.einsum("bhd,hdc->bhc", q_nope.squeeze(2), absorb[:, :128])
-    query = torch.cat((latent_query, q_pe.squeeze(2)), dim=-1).unsqueeze(1).contiguous()
     attn_out = _attend_decode(self, query, cache, table, cache_seqlens.contiguous(), max_seqlen)
     if attn_out.shape != (batch, 1, 128, 512) or attn_out.dtype != torch.bfloat16:
         raise RuntimeError("Selected kernel returned an unexpected R1 latent attention tensor")
-    output = torch.einsum("bqhc,hdc->bqhd", attn_out, absorb[:, 128:]).reshape(batch, 128 * 128)
-    output = _project_decode(self, "o_proj", _quantize(output), weight_scale)
-    return output.view(batch, 1, -1), k_tensor
+    if entry is not None:
+        entry.attn.copy_(attn_out)
+        entry.post.replay()
+        self._r1_sm103_projection_graph_stats["replays"] += 1
+        return entry.output.clone(),k_tensor.clone()
+    return _decode_output(self,attn_out,weight_scale,absorb),k_tensor
