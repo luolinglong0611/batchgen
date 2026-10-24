@@ -354,16 +354,39 @@ transport deadline; its original completed result was recovered from the
 exclusive saved stage and SHA-verified after the reader independently exited.
 Node1 completed in25.05seconds. Neither reader was replayed.
 
-An independent fresh mmap candidate has been dispatched to test the existing
-MAP_PRIVATE skeleton loader while retaining hostKV64, the corrected GEMM,
-original requests, per-profile deadlines and numeric/scoring/resource gates.
-Full-model memory and both512 replays, including full short-profile output
-parity against frozen v6, are required before larger experiments. The user
-subsequently reduced the6000 tier to1024 measured requests per profile/engine,
+The fresh traceOFF v10 cohort used the existing MAP_PRIVATE skeleton loader,
+retaining hostKV64, the corrected GEMM, original requests, per-profile deadlines
+and numeric/scoring/resource gates. Its short input8192/output2048 replay
+completed all512 unique requests, zero failures/missing IDs, with4,194,304 input
+and1,048,576 output tokens. Upload-to-complete-results BCT was2091.080453199
+seconds, observed output rate501.451772645 tokens/s; separate warmup1 took
+428.953476058 seconds and is excluded. Original guard/client exited naturally
+with code0, no signals, and independently observed absence. The leader's
+one-second samples recorded minimum MemAvailable219,641,831,424 bytes and
+peak client-session RSS396,177,408 bytes; these do not establish a continuous
+peer minimum. The28-file raw import preserves32,308,259 bytes. Import,
+analysis and freeze-index SHA256 are respectively:
+`83c6d5d1d010a248c83ccd4f922f5141381a6297b2127764d06fd76f45f3dbb6`,
+`e7c964e5c48d1dfdb58b16d4d7cf9e94d113f8b776b78276666b872299c2c705`,
+`57904fd4da8ff96dcf9b8688479643f7d7c1cd8c9084d82737ede5443b926e59`.
+
+All512 measured responses plus the separate warmup were compared against the
+frozen v6 mmapOFF run: exact API text hashes, usage and finish reasons matched
+for all513 rows, differences0. Canonical per-node source maps remained equal
+to the original repaired deployment, including its fixed inventory exceptions.
+This is storage-output parity for these actual requests, without a native-ID,
+model-quality, steady-performance or paper-reproduction claim. The comparison
+report SHA256 is
+`6356b4673ea29bdfb8ca7838385b3a50a9add46112c3e402402b84f4df8c9b30`.
+The long input2048/output8192 replay is now running on the same v10 services.
+Its completion and idle owned PSS/USS snapshots remain prerequisites for the
+larger bounded experiment.
+
+The user reduced the6000 tier to1024 measured requests per profile/engine,
 one exploratory round, with unchanged input/output lengths and the exact
 original-source first1024 selection shared by BG and SG. Actual CPU inspection
 SHA256 is `d48095551a85147792f7d42c8a6d92eef82f15256e6f184760b9a1a8fbf721b1`.
 The original6000 source and unexecuted repeated protocol remain preserved.
-No mmap full-model qualification or1024 measurement result exists yet.
+No complete mmap long512 qualification or1024 measurement result exists yet.
 Detailed private continuation state is in
 `.repro-private/index64-resume-20261024/STATUS.md`.
