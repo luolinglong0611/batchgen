@@ -424,7 +424,17 @@ one exploratory round, with unchanged input/output lengths and the exact
 original-source first1024 selection shared by BG and SG. Actual CPU inspection
 SHA256 is `d48095551a85147792f7d42c8a6d92eef82f15256e6f184760b9a1a8fbf721b1`.
 The original6000 source and unexecuted repeated protocol remain preserved.
-The first actual BG1024 short-profile guarded client is running on v10.
-No completed1024 measurement result exists yet.
+The first actual BG1024 short-profile client completed all1024 unique requests,
+zero failures/missing IDs, with8,388,608 input and2,097,152 output tokens.
+Primary BCT was3870.283921406 seconds, observed output rate541.859988204
+tokens/s, including the low-concurrency tail. Separate warmup1 took
+425.917463692 seconds and is excluded. Both original CPU processes closed
+naturally without cleanup signals and their absence was independently observed.
+Original archive bytes were transferred, SHA-verified, imported and analyzed.
+Import and analysis SHA256 are respectively
+`4e903e589e90fc9ed151c1ab6fcfcb623e427236f50e69f9487f457c1dbd0f81` /
+`bfc15d941e9f4066140b9a02fb44ac30d67915462798916faadbf2e5bdb64d48`.
+The actual BG1024 long-profile client has started on the same v10 cohort;
+no completed long1024 or new SG1024 measurement exists yet.
 Detailed private continuation state is in
 `.repro-private/index64-resume-20261024/STATUS.md`.
