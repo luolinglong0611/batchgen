@@ -443,7 +443,68 @@ The original archive was SHA-verified, imported and analyzed. Import and
 analysis SHA256 are respectively
 `aba6870a54fe88eaf535b2506469ae78e60d4adbc7452d0cb68c65c2af16e171` /
 `cfe9c4dec0ae92d6ebc3165ea51ad12275c34073a3e65a87163178e0882db7d9`.
-These are single exploratory observations. SGLang1024 comparison and final
-service restoration remain pending.
+These are single exploratory observations. The selected SG-Bv2 comparison
+and final repaired BG dual-service restoration are now complete.
+
+## Completed reduced comparison and restored services
+
+Each row contains1024 original-prefix requests, zero failed/missing/duplicate
+records, exact prescribed token totals, and independently closed CPU clients.
+The two engines use the same first1024 source IDs and payload hashes. Separate
+warmup and offline validation are excluded from the primary BCT.
+
+| Profile | BG BCT (s) | SG-B BCT (s) | BG output tokens/s | SG-B output tokens/s |
+| --- | ---: | ---: | ---: | ---: |
+| input8192-output2048 | 3870.283921 | 262.566693 | 541.859988 | 7987.121212 |
+| input2048-output8192 | 10271.692827 | 497.086560 | 816.672397 | 16875.547808 |
+
+Excluded warmup timings were BG1/SG-B1024 requests per profile:
+short425.917464/266.008069 seconds and long1492.233446/497.242248 seconds.
+SG-B assigns512 warmup and512 measured requests to each endpoint. It performs
+one global async measured burst and times through the last complete response.
+BG measures native upload/batch/poll/full-response retrieval. These API clocks
+and warmup coverage differ.
+
+BG uses TP1/EP16/DP-attention16 across both nodes, framework graphsOFF,
+hostKV64GiB per node, mmapON and traceOFF. SG-B uses two independent
+TP8/DP8/EP1 replicas, graphsON with maximum128 per DP rank, memory fraction.85
+and chunk prefill16384. BG worker native context163840 and SG context32768
+also differ; the BG submitted interface limit32768 is a separate setting.
+Observed SG-B/BG output-rate ratios are14.740194 and20.663791. They describe
+these actual configurations and one exploratory round, without a steady-state,
+quality-equivalence, formal performance or paper-reproduction claim.
+The original6000-request protocol remains unexecuted and preserved.
+
+All original SG1024 archive bytes were SHA-verified before offline analysis.
+Import / analysis SHA256:
+
+- SG-B `input8192-output2048`: `6991653bfbed9c4d4afd6eba639f9f4c98b968c8f714e21931fb7884a5dec5b4` / `fa49510f2bb137ed11cba9fa134e7fb02adc97055ac3cf8fa3c3ea29ce4507de`.
+- SG-B `input2048-output8192`: `0f30cae516b8064b5019ac78ad0c39675809e6ec9a237b0118c77e016d7f86e7` / `54a32858e7b757385dc1c772d12dbbf00b8ee52fbb2523428a06701b0e07cf1f`.
+
+The four-run comparison report SHA256 is
+`fca03eec787ab78d3f0c3c63dc7528419a384428266f8c3263435d9b29951f7b`.
+Its pinned96-response quality summary retains the descriptive EM/F1 and
+intervals reported above; no new quality-pass conclusion is inferred. Earlier
+strict numerical and NaN-padding failures remain unresolved.
+
+After their respective clients closed, both original BGv10 and SG-Bv2 model
+sessions were independently observed absent and all16 GPUs idle before the
+next cohort started. Their preserved closure-import receipt SHA256 are
+`9ea02bb0f155dfd183ed99fb800d2d0b9152b5e1bc02cc660eabde3cf644dd07` /
+`128ae27b222af3e23ae28aa02dfc1c60b7d75d3060941923eedab4ab39cefc13`.
+
+The final `r1-fast-diagnostic-v11` BG services are restored on both nodes.
+Actual saved launch bytes, original supervisor/service identities, environment,
+healthHTTP200 and empty local intake/scheduling/batch pools were verified.
+Both per-node source maps and source-deployment bindings exactly match the
+repaired v10 cohort, retaining its fixed inventory differences. Skeleton mmap
+is ON, native trace is OFF, hostKV64 and diagnostic attention selection remain
+unchanged. No additional inference was submitted during this restoration.
+
+- Node0: supervisorPID1636685, servicePID1636690; actual ready SHA256 `7207dde0df37c79e9ec83fc765ea5b82e25f48cc2e7121ab865b1f87d1354b73`.
+- Node1: supervisorPID330105, servicePID330108; actual ready SHA256 `600978974079d86f69ecb075919822711d6fac2376c77131eb2a1ab5093ce7fb`.
+
+Final dual-deployment receipt SHA256:
+`1eae614e14ddf356b9863583f8415827ba04f9c39c95f8348d257724d1ce0747`.
 Detailed private continuation state is in
 `.repro-private/index64-resume-20261024/STATUS.md`.
