@@ -434,7 +434,16 @@ Original archive bytes were transferred, SHA-verified, imported and analyzed.
 Import and analysis SHA256 are respectively
 `4e903e589e90fc9ed151c1ab6fcfcb623e427236f50e69f9487f457c1dbd0f81` /
 `bfc15d941e9f4066140b9a02fb44ac30d67915462798916faadbf2e5bdb64d48`.
-The actual BG1024 long-profile client has started on the same v10 cohort;
-no completed long1024 or new SG1024 measurement exists yet.
+The BG1024 long profile also completed all1024 unique requests, zero failures,
+with2,097,152 input and8,388,608 output tokens. Primary BCT was10271.692826756
+seconds, observed output rate816.672396798 tokens/s. Separate warmup1 took
+1492.233446348 seconds and is excluded. Both original CPU processes closed
+naturally without cleanup signals and were independently observed absent.
+The original archive was SHA-verified, imported and analyzed. Import and
+analysis SHA256 are respectively
+`aba6870a54fe88eaf535b2506469ae78e60d4adbc7452d0cb68c65c2af16e171` /
+`cfe9c4dec0ae92d6ebc3165ea51ad12275c34073a3e65a87163178e0882db7d9`.
+These are single exploratory observations. SGLang1024 comparison and final
+service restoration remain pending.
 Detailed private continuation state is in
 `.repro-private/index64-resume-20261024/STATUS.md`.
