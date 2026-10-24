@@ -64,6 +64,38 @@ def test_decode_replica_batch_estimate_accounts_for_tp_replication():
     assert estimate_max_decode_replica_batch(64, 16, 1) == 4
 
 
+def test_uneven_assignments_do_not_strand_prefilled_rows():
+    # Representative 512-row skew: average32 admits498 despite abundant pages.
+    counts = (18,) + (33,) * 14 + (32,)
+    candidates = tuple(
+        _cand(f"r{rank}-{row}", rank=rank, gidx=sum(counts[:rank]) + row)
+        for rank, count in enumerate(counts) for row in range(count)
+    )
+    old_cap = estimate_max_decode_replica_batch(512, 16, 1)
+    actual_cap = estimate_max_decode_replica_batch(512, 16, 1, replica_counts=counts)
+    request = dict(candidates=candidates, total_pages=40000, world_size=16,
+                   free_pages=(40000,) * 16)
+    assert len(DecodeScheduler.select_decode_batch(
+        DecodeBatchRequest(**request, max_rank_bsz=old_cap))) == 498
+    assert actual_cap == 33
+    assert len(DecodeScheduler.select_decode_batch(
+        DecodeBatchRequest(**request, max_rank_bsz=actual_cap))) == 512
+
+
+def test_actual_counts_use_tp_groups_and_keep_balanced_sizes():
+    assert estimate_max_decode_replica_batch(64, 16, 8, replica_counts=(1, 63)) == 63
+    for counts in ((4,) * 16, (30,) * 12 + (29,) * 4, (6,) * 4 + (5,) * 12):
+        assert estimate_max_decode_replica_batch(sum(counts), 16, 1, replica_counts=counts) == (
+            estimate_max_decode_replica_batch(sum(counts), 16, 1))
+    assert estimate_max_decode_replica_batch(0, 16, 8, replica_counts=(0, 0)) == 0
+
+
+def test_replica_count_snapshot_rejects_invalid_metadata():
+    for counts in ((1,), (1, -1), (True, 0), (0, 0), (1.0, 0)):
+        with pytest.raises(ValueError, match="replica_counts"):
+            estimate_max_decode_replica_batch(1, 16, 8, replica_counts=counts)
+
+
 def test_single_candidate_fits():
     # Live free capacity is 100 pages; req 10 fits.
     plan = DecodeScheduler.select_decode_batch(_req([_cand("a", req_pages=10)], 100))

@@ -35,14 +35,25 @@ class DecodeCapacityError(RuntimeError):
 
 
 def estimate_max_decode_replica_batch(
-    total_candidates: int, world_size: int, attn_tp_size: int
+    total_candidates: int, world_size: int, attn_tp_size: int,
+    *, replica_counts: Optional[Tuple[int, ...]] = None,
 ) -> int:
-    """Upper-bound rows held by one DP replica (one TP attention group)."""
+    """Size a replica's buffer from its assigned rows when available.
+
+    Total-only callers retain the balanced estimate. That estimate is not an
+    upper bound for token-balanced or otherwise uneven sequence assignments.
+    """
     if attn_tp_size <= 0 or world_size % attn_tp_size != 0:
         raise ValueError(
             f"attn_tp_size={attn_tp_size} must divide world_size={world_size}"
         )
     num_replicas = world_size // attn_tp_size
+    if replica_counts is not None:
+        if (len(replica_counts) != num_replicas
+                or any(type(count) is not int or count < 0 for count in replica_counts)
+                or sum(replica_counts) != total_candidates):
+            raise ValueError("replica_counts must be nonnegative integers summing to total_candidates")
+        return max(replica_counts, default=0)
     return (total_candidates + num_replicas - 1) // num_replicas
 
 

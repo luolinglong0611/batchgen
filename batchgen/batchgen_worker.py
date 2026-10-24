@@ -9256,16 +9256,28 @@ class BatchGenWorker:
 				# ============ STEP A: Load model FIRST (needed for accurate GPU KV size) ============
 				# Estimate max sequences per rank for buffer allocation
 				# Use PREFILLED + ON_HOLD + IN_DECODE as upper bound
-				prefilled_count = len(self.global_batch.get_sequences_by_status(SequenceStatus.PREFILLED))
-				onhold_count = len(self.global_batch.get_sequences_by_status(SequenceStatus.ON_HOLD))
-				in_decode_count = len(self.global_batch.get_sequences_by_status(SequenceStatus.IN_DECODE))
-				total_candidates = prefilled_count + onhold_count + in_decode_count
+				candidate_uuids = (
+					self.global_batch.get_sequences_by_status(SequenceStatus.PREFILLED)
+					+ self.global_batch.get_sequences_by_status(SequenceStatus.ON_HOLD)
+					+ self.global_batch.get_sequences_by_status(SequenceStatus.IN_DECODE)
+				)
+				total_candidates = len(candidate_uuids)
+				attn_tp_size = self._decode_attn_tp_size()
+				replica_counts = [0] * (self.world_size // attn_tp_size)
+				for uuid in candidate_uuids:
+					seq = self.global_batch.get_sequence(uuid)
+					replica = seq.decode_dp_group if attn_tp_size > 1 else seq.assigned_rank
+					if type(replica) is not int or not 0 <= replica < len(replica_counts):
+						raise ValueError(f"sequence {uuid[:8]} has invalid decode replica {replica}")
+					replica_counts[replica] += 1
 				# TP attention replicates one group's sequences across all G ranks,
-				# so each rank needs the per-group batch, not total/world_size.
+				# so each rank needs the actual largest per-group batch. An average
+				# can strand prefilled rows even when GPU KV pages remain free.
 				max_num_seq_estimate = estimate_max_decode_replica_batch(
 					total_candidates,
 					self.world_size,
-					self._decode_attn_tp_size(),
+					attn_tp_size,
+					replica_counts=tuple(replica_counts),
 				)
 				# Ensure at least some minimum
 				max_num_seq_estimate = max(max_num_seq_estimate, 16)
@@ -9277,7 +9289,8 @@ class BatchGenWorker:
 
 				logging.info(
 					f"[DECODE] Rank {self.rank}: entering decode configure "
-					f"(max_num_seq_estimate={max_num_seq_estimate})"
+					f"(max_num_seq_estimate={max_num_seq_estimate}, "
+					f"replica_counts={replica_counts})"
 				)
 				self._load_decode_model(max_num_seq_estimate, self.comm)
 
