@@ -390,15 +390,41 @@ This is storage-output parity for these actual requests, without a native-ID,
 model-quality, steady-performance or paper-reproduction claim. The comparison
 report SHA256 is
 `6356b4673ea29bdfb8ca7838385b3a50a9add46112c3e402402b84f4df8c9b30`.
-The long input2048/output8192 replay is now running on the same v10 services.
-Its completion and idle owned PSS/USS snapshots remain prerequisites for the
-larger bounded experiment.
+The same v10 cohort also completed all512 input2048/output8192 requests,
+zero failures/missing IDs, with1,048,576 input and4,194,304 output tokens.
+Primary BCT was5250.486727973 seconds, observed output rate798.840986999
+tokens/s. Separate warmup1 took1473.195581547 seconds and is excluded. Both
+original CPU processes exited naturally without signals and were independently
+observed absent. The leader's sampled minimum MemAvailable was198,080,581,632
+bytes, with client-session RSS peak121,520,128 bytes. Import, analysis and
+freeze-index SHA256 are respectively:
+`e316fac1fb2ac1e00c86186504678fb9879ddb82ca53b8b3c603cc2a79da8e13`,
+`6d49662398949b31450bef210c0c15705c3a624a1e9d30252254e2cfc36b1adc`,
+`d54011783774effd899126b8e055d0060872fddf56c09a936c6474e5483a8a66`.
+The earlier v6 long512 failure remains a separate failed observation.
+
+After both complete replays, idle rollups covered all10 original service-SID
+processes per node. PSS totals were810.288231/810.137455GiB, with private
+clean+dirty totals65.716175/65.286560GiB; MemAvailable after collection was
+195.485859/196.678326GiB. These are idle points, with different workload/trace
+history from the v7 quality baseline, not peaks or a causal whole-machine
+memory reduction. Both35-second terminal transports timed out; both original
+completed results were recovered from their exclusive saved stages after
+independently observing the readers absent. Neither reader was replayed.
+Memory-import and bounded-experiment qualification SHA256 are respectively
+`b1300f1e525ac819ecdf25a775f4e986029372142800a926f9c82327635f06aa` /
+`252c6d143016014a2be657c4f18c411158c34644b09d9b145215d46dfa23a6e0`.
+Full short-profile API-output parity, both complete512 profiles and these
+memory observations permit one bounded exploratory1024 round. They do not
+establish model-quality, representative-shape, steady-performance or paper
+reproduction qualification.
 
 The user reduced the6000 tier to1024 measured requests per profile/engine,
 one exploratory round, with unchanged input/output lengths and the exact
 original-source first1024 selection shared by BG and SG. Actual CPU inspection
 SHA256 is `d48095551a85147792f7d42c8a6d92eef82f15256e6f184760b9a1a8fbf721b1`.
 The original6000 source and unexecuted repeated protocol remain preserved.
-No complete mmap long512 qualification or1024 measurement result exists yet.
+The first actual BG1024 short-profile guarded client is running on v10.
+No completed1024 measurement result exists yet.
 Detailed private continuation state is in
 `.repro-private/index64-resume-20261024/STATUS.md`.
