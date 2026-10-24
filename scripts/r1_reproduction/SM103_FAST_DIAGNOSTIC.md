@@ -1,5 +1,75 @@
 # Explicit SM103 fast full-model diagnostic
 
+## Latest measured deployment — 2026-10-25
+
+Final cohort `r1-fast-diagnostic-v15` runs on both nodes at runtime source
+commit `8890115737d5356047a00f7bf28b5c7dd5efadc1`
+with host KV 192 GiB per node, the checked attention opt-ins, traceOFF and
+mmapON. Final fresh observations confirm both HTTP services healthy with
+no active requests. This is a **fast diagnostic performance result**:
+**historical strict numerical and NaN-padding failures remain unresolved**;
+fixed output lengths do not establish semantic quality or model equivalence.
+
+All BG entries below use the original first 512 requests per profile, fixed
+lengths, temperature 0, ignored EOS, no inference retries, and one excluded
+warmup. BG time is upload to all native result files retrieved; SG time is
+concurrent HTTP submission to all bodies retrieved. SG values are historical
+matched 512 controls with different kernels/graph coverage/expert layout.
+Each configuration has one observation, not a repeated-trial estimate.
+
+| Configuration | 8192 input / 2048 output (s) | 2048 input / 8192 output (s) |
+|---|---:|---:|
+| BG baseline, KV64 | 2091.080 | 5250.487 |
+| BG attention optimization, KV64 | 1630.055 | — |
+| BG attention + KV160 | 949.579 | 2620.830 |
+| BG scheduler fixes + KV160 | 929.502 | 1778.014 |
+| BG final, same code + KV192 | 535.621 | 1344.096 |
+| SGLang historical TP16, two nodes | 235.562 | 472.887 |
+| SGLang historical two TP8 replicas | 164.280 | 375.742 |
+
+Final output throughput is 1957.682/3120.540 tokens/s.
+End-to-end speedups over the original BG are 3.904x/3.906x.
+Both final profiles selected 512 in one prefill wave, prepared 512 for decode,
+assigned 32 to each of 16 replicas, and recorded zero recomputed admissions.
+Actual global host KV capacity is 91,678 pages; the native peak allocation and
+available-memory observations are retained in the final comparison JSON.
+
+The controls separate configuration and implementation effects:
+
+- The attention-only KV64 short control improved 1.283x. It removes host scalar/nonzero
+  synchronization from valid attention metadata, caches checked absorbed weights and
+  captures only local projections; actual paged MLA stays eager with its real maximum
+  length.
+- KV64→160 improved the same attention implementation another 1.717x on the short profile by
+  reducing waves and model rebuilds. KV192 was then tested with exactly the same canonical
+  runtime source as KV160.
+- Completed-history balancing and average-as-upper-bound padding bugs were repaired. At
+  unchanged KV160 the long run improved 2620.830→1778.014s; both changes were applied
+  together. The actual first 16 replica counts are 32 each and all 512 entered decode.
+- Remaining differences include pure-DP streamed prefill weights, model reconstruction,
+  eager routed MoE/CPU scalar reads and partial graph coverage. SG uses native
+  `flashinfer_trtllm` MoE and full-step CUDA graphs. There is no measured percentage split
+  between remaining MoE, network and CPU launch costs.
+
+Both backends use the original FP8 checkpoint. Native BG logs confirm
+IB/RoCE+GDRDMA; eth0 is out-of-band bootstrap. BG explicitly disables NVLS,
+and SG NVLS/loaded-NCCL binary equivalence is not assumed. This diagnosis
+does not claim that high-speed transport eliminates collective costs.
+
+The metadata changes passed 24 decode-helper tests and five actual assignment
+method CPU tests. The attention optimization passed real checkpoint-layer
+GPU parity at batch 1/16/32 and lengths 2048/8192 plus isolated invalid-metadata
+rejection tests; those layer results do not upgrade the historical full-model
+quality gate. All final 512 native results passed raw output/HTTP/usage checks
+and the original CPU guard/client were independently closed before export.
+
+Actual comparison SHA256: `87f5be5d693beed82affc9126a6e75e8666a4cb700abdda16989a610f79a6a22`.
+Actual evidence is saved under `.repro-private/r1-perf-20261025/`; the JSON
+binds both final ready observations, source maps, closed analyses and archives.
+Earlier sections below are chronological qualification records of superseded
+cohorts; their historical deployment states are not the current v15 state.
+
+
 The R1 launcher defaults to `triton_precision`. To collect full-model diagnostic
 outputs with FA4 prefill and FlashInfer MLA decode, select
 `--attention-implementation fa4_flashinfer`. The plan then explicitly sets all
@@ -508,3 +578,346 @@ Final dual-deployment receipt SHA256:
 `1eae614e14ddf356b9863583f8415827ba04f9c39c95f8348d257724d1ce0747`.
 Detailed private continuation state is in
 `.repro-private/index64-resume-20261024/STATUS.md`.
+
+## 2026-10-25 bottleneck investigation and decode optimization
+
+The restored v11 cohort above was retired without inference before this
+investigation. Its independently imported closure receipt is
+`e4bf702ee4e8e58ae7426fa45103f6cf65495e11d92be5f14a314889d7f06106`.
+The following attribution uses actual rank0 timestamps clipped to each original
+512-request measurement, rather than adding time across ranks.
+
+| Original BG512 profile | Batch wall (s) | Decode window (s) | Logged decode steps | Mean step (ms) | Recomputed admissions |
+|---|---:|---:|---:|---:|---:|
+| 8192 input / 2048 output | 2091.080453 | 1671.107 | 8060 | 206.696 | 42 |
+| 2048 input / 8192 output | 5250.486728 | 4929.054 | 22653 | 217.320 | 378 |
+
+Upload/create preparation was 0.272/0.058 seconds. Decode windows account for
+79.9%/93.9%; they include control overhead. CUDA-event durations include CPU
+launch gaps and do not measure occupied SM time. The original host KV64 GiB
+per node supplies 30558 global pages (about1.95M token slots), resulting in
+multiple prefill/decode waves and eviction/recomputation. This configuration
+cost is separate from the per-step implementation cost.
+
+Historical matched512 SGLang measurements further bound the topology argument:
+TP16/DP16 across two nodes took235.561517/472.886556 seconds; two independent
+TP8/DP8 replicas took164.280091/375.741605 seconds. Both enable DP attention
+and CUDA graphs, use native kernels and disable radix caching. Splitting the
+replicas improved these observations by1.434x/1.259x, insufficient to explain
+BG's entire gap. These are historical controls, with one warmup request for
+TP16 and one per endpoint for TP8, excluded from measurement. BG also uses
+cross-node MoE allgather/allreduce and a different expert layout; this is not a
+controlled estimate of communication alone.
+
+Source commit `d16b481b7bbaecf9af2499abf2c7bc2b9bbb92b5` adds three explicit
+SM103 diagnostic opt-ins: asynchronous GPU metadata assertions, versioned
+absorbed-weight caching, and two local projection CUDA graphs per layer/shape.
+The paged attention call keeps each actual max sequence length; fixed-bound
+whole-attention capture was rejected after one observed bitwise mismatch.
+Defaults retain the original eager validation. Invalid metadata remains an
+error; a device assertion requires discarding that CUDA context.
+
+Actual checkpoint layer0 GPU qualification covered batch1/16/32 at length2048
+and8192: all output/new-KV values were bitwise equal, including changes to
+hidden states, positions, sequence lengths and page tables. Retained outputs
+were not overwritten by replay; source mutation/replacement invalidated
+caches. Isolated invalid-page/coverage/position/max-length cases were rejected.
+Layer wall time improved2.170x–2.972x (about1.49–1.79ms to0.51–0.71ms).
+This is a layer result, not a full-model speedup or a new quality pass.
+Positive GPU report SHA256:
+`b9b516f5d3d0a3d8fabc04f3a8169e98875d1108ade644f773048f713d821280`.
+
+Both nodes now have backend SHA256
+`7e6cc5e9119421fb634423edd343050d2173fb4dfb63264f3aa69cae38728851`;
+all other runtime source hashes, including the earlier W8A8 index64 repair,
+were preserved. Actual CPU deployment receipt hashes (node0/node1):
+`0f85f08277cee71782fce51d36242247463af99bb937c4aecadc7c1c36230fea` /
+`ad600bae9258eec11803bdf6989defde20171d13c401b624fdb7f840d96c3433`.
+End-to-end implementation and capacity results are reported below; the layer
+measurements alone did not establish those results. Historical strict numerical and
+NaN-padding failures remain unresolved.
+
+The actual implementation-only v12 control has completed at the unchanged
+hostKV64, with the same original512 payloads, lengths, EOS policy and excluded
+warmup1. All512 native results passed independent raw-output/HTTP/usage checks:
+1630.054834 seconds,643.276519 output tokens/s, versus2091.080453 seconds and
+501.451773 tokens/s before the change (1.283x observed throughput,22.0% less
+wall time). The measured weighted decode step fell206.696→147.211ms;
+decode windows fell1671.107→1189.679s. The same four prefill admissions
+190/190/172/2 and42 recomputed admissions remain, isolating the remaining
+capacity/tail problem. Other wall time was440.376s versus419.973s. The final
+two requests still needed their own phase, despite more than99% of host pages
+being free during that tail. Warmup1 completed in344.776004s and is excluded.
+This is one paired before/after observation, not a repeated-trial estimate.
+
+Closed v12 archive/manifest/analysis SHA256:
+`050ac48b0a0aa9369712af4436ebb3a091c516280cf31833af03f66ec941cfe0` /
+`d936c38b38fdf3af4abd0c25812241a661aef64c8c045876de92fbeed04f91ea` /
+`c75c21455f3bba1e6ed1fa4ed187084984a299266595b6e82f64cad424318cab`.
+Original guard/client exited0 without signals and were independently observed
+absent before export. Both model sessions were subsequently stopped through
+verified pidfds and observed closed with all16 GPUs idle; retirement receipt
+SHA256 `d4e003090762be986d3e2ac4115f979eb426d6908b4ca80bbdb1a99c376483e7`.
+The v13 capacity experiment kept identical runtime source and opt-ins,
+changing only host KV to160GiB per node through an explicitly pinned private
+wrapper around the unchanged launcher. Its fresh two-node process/environment
+observations and completed512 results are recorded below. The controller also
+checks peer host memory with a40GiB emergency stop floor; the original local
+client memory floor remains32GiB.
+
+The v13 hostKV160 short-profile control has now completed with all512 exact
+results:949.578636 seconds and1104.253992 output tokens/s. This is2.202x the
+original throughput and1.717x the v12 implementation-only control. The two
+prefill admissions were476/84, with4094 logged decode steps instead of8060;
+decode windows were643.644s and other time305.935s. Weighted decode timing was
+156.601ms; stable428-active intervals were about145–147ms, close to the prior
+170-active intervals. The observed gain comes mainly from doing fewer decode
+waves with a larger active batch, rather than making each step faster.
+
+The unchanged10% watermark still evicted48 requests in the first wave,
+including an observed growth plan with zero remaining growth rows/pages.
+Consequently recomputed admissions rose42→48 even though waves fell4→2.
+The capacity change must not be described as eliminating recomputation.
+Both BG controls retain framework graphs OFF and the same local projection
+opt-ins; generic/full-step graph coverage and MoE kernels were not changed.
+
+Short v13 archive/manifest/analysis SHA256:
+`f5ec139fd2977142254b6448a750c651dd87fb55093f7fdab688006f736850eb` /
+`9b1fd16b0b4c745e8790ee2ddbe1b9683e05ddc724e931cd3cf111eaee8e814c` /
+`99d1f03cd0fff3554a79a3c534eb2ab18540f80062aca4149bce4198aa30b522`.
+Excluded warmup1 was313.686154s. The sampled local host-memory minimum across
+warmup and measurement was108.102GiB; no peer40GiB stop was triggered.
+The long512 profile then ran on the same v13 services and source; its
+completed results follow below.
+
+The running R1 decode log explicitly reports all16 local experts per rank as
+persistent in the multi-node mode. The original/default MoE path still uses
+allgather/allreduce over16 ranks, grouped Triton operators and two GPU scalar
+readbacks per routed layer (`grouped_dequant_moe_fp8`); this patch changes the
+attention path only. SGLang's native fused MoE and full-step graph coverage
+remain different. No measured percentage split between remaining MoE,
+communication and launch costs is claimed. Upload/create overhead was measured
+at about0.27s in both new short runs, and cannot explain hundreds of seconds.
+
+The long v13 control exposed two additional metadata implementation bugs.
+`estimate_max_decode_replica_batch` used a ceiling average as an upper bound;
+the first512 prefill configured32 rows per replica, but only498 entered decode
+while14 remained PREFILLED despite free GPU KV pages. Rank0 actually received18
+requests, which implies some other replica received at least33. The complete
+16-rank assignment vector was not logged; the CPU regression vector
+`(18, 33*14, 32)` is representative, not a claimed observed vector. Once other
+rows were evicted the14 eventually entered decode, leaving a long14-row tail
+with99% of host pages free.
+
+The default L² balancer also included COMPLETED requests retained by the global
+batch iterator. Earlier8192-token requests therefore biased the later2048-token
+batch. Commits `0a42dc1631c0a1074746d6f9c2834f884f57b1a2` and
+`8890115737d5356047a00f7bf28b5c7dd5efadc1` use actual per-replica candidate
+counts for padded-buffer sizing and exclude completed history from L² and
+legacy least-count balancing. Active/resumable work still counts; minimum16
+and hard cap128 remain. The prefix-sharing assignment branch is unchanged.
+The exact candidate decode helper passed24 CPU tests; the actual worker
+assignment method passed five CPU metadata tests, including completed8k history,
+active/evicted work and legacy balancing. Their report hashes are
+`b2ea89d6e5142889e8eb159921c978adf762b0fe4d0ac7fde64363f3962f3002` and
+`dd7df5876df298263adf53f9dea7f4e3e89451736657dff8ca8ef83c5e17217f`.
+Those fixes remained local while the v13 control retained its original source
+until closure; their actual dual deployment and full-model results follow.
+
+Native rank0 phase-switch timers whose completion falls within the original
+measurement report246.596s/8 switches for the old short run,267.827s/8 for the
+implementation-only control, and132.480s/4 for hostKV160. For the latter,
+one observed decode→prefill transition was31.856s and the following
+prefill→decode transition34.788s (`persistent=False`). These timers cover the
+worker's busy transition path, including model release/rebuild/transfer work;
+they overlap the wall-window attribution and must not be added to it. This is
+a further implementation cost that grows with the number of waves. The old
+long control reported251.755s/6 switches. This does not isolate differences
+against SGLang's prefill or expert computation.
+
+The v13 long control has now completed512/512 exact2048/8192 results,
+zero failures:2620.830431s and1600.372138 output tokens/s,2.003x the old
+long run. Warmup1 took995.181932s and is excluded. Decode windows were
+2422.876s, other time197.954s, logged steps16382 and weighted step147.628ms.
+Prefill selections were512/84 with84 recomputed admissions; native phase
+switch timers reported170.539s/4 switches. The fourteen-row tail therefore
+required nearly a second full8192-step wave despite abundant free host KV.
+This remains the unmodified scheduler control, before the metadata repairs.
+
+Long v13 archive/manifest/analysis SHA256:
+`4d545e21fed654ef96055bd97e8e5c54f7daed42ed169ad1d2e2bbb9dc0801b7` /
+`d13ead2b2f705298afd4345370d55f86620797fb617516adfde2bc0968f67665` /
+`fcf4f943a73e923e1f8772a395b1947e0237916c030d838141fd30a6b77bf4a4`.
+The original CPU guard/client exited0 without signals and were independently
+observed absent before archive transfer. These are fixed-length transport
+results, not a new semantic-quality or strict numerical pass.
+
+The v13 dual services were subsequently retired normally: both original
+supervisors/services absent, native supervision exited0 with child reaped and
+no parent cleanup required, all16 GPUs idle. The final metadata source was
+then deployed to both nodes at commit
+`8890115737d5356047a00f7bf28b5c7dd5efadc1`; actual node0/node1 deployment
+receipt hashes are
+`af06b4b2bd6c79e87ea89924b1adf371f6e2609592bec9d71e344cf75105847e` /
+`56c89207d21cc4b2bcd153bb19947cd26d72d84360714ce2674b6f3f188c6939`.
+The432-file common runtime map is now
+`00f0cb6c2d200ac60c183dec65aee43c6e9391279c33e66ddae45cce6ba5e10f`;
+the five previously documented node0 metadata exceptions remain unchanged.
+V14 keeps hostKV160, the same attention opt-ins and all model/math/protocol
+settings. Its two512 profiles repeat the original short→long order, each with
+one excluded warmup, so completed-history conditions are controlled.
+
+Node0's first two v14 startup attempts stopped at the fresh GPU-idle guard,
+before execution-directory or model creation. Subsequent read-only checks
+observed all eight GPUs at4MiB,0% utilization and no compute processes; the
+successful node0 launch retained the identical guard and reused only exact
+SHA-verified support files. Node1 started once. This was prelaunch handling;
+no inference request or benchmark was retried. Full-model results are reported below; CPU metadata tests alone did not
+establish them.
+
+Actual native NCCL logs confirm `Using network IB`, all eight `mlx5_bond_*`
+RoCE devices and cross-node `NET/IB/*/GDRDMA` channels. No `NET/Socket` path
+appears in that archived node0 startup. `eth0` is the out-of-band bootstrap;
+it is not evidence that tensor communication fell back to TCP. BG explicitly
+logs `NCCL_NVLS_ENABLE=0`; no SG NVLS equivalence or communication saturation
+claim is made. High-speed transport configuration does not remove the cost
+of performing collectives over16 ranks at every routed layer.
+
+The frozen SGLang A/B launch plans both point to
+`DeepSeek-R1-original-fp8`, explicitly select FP8 quantization and BF16 dtype,
+and use `trtllm_mla` attention plus `flashinfer_trtllm` MoE. They do not switch
+to a FP4 checkpoint. Their DP-attention/page64/request-context32768 settings
+are explicit. A uses TP16/DP16/EP1 across2 nodes, chunked prefill32768 and
+max-running2048; B uses independent TP8/DP8/EP1 servers, chunked prefill16384
+and max-running1024 per endpoint. Both enable CUDA graphs with max batch128
+and disable radix caching. Those native fused MoE and graph paths differ
+from BG's current eager routed-MoE path and local attention-projection graphs.
+The SGLang plan does not explicitly set NVLS; no equality with BG's explicit
+NVLS0 is assumed. BG's batch-interface context32768 remains distinct from
+its native worker context163840; all tested total token lengths fit both.
+
+The optimized dual-node controls use these environment settings on
+both nodes (the optimization defaults remain disabled outside this recipe):
+
+```text
+BATCHGEN_R1_SM103_ASYNC_VALIDATION=1
+BATCHGEN_R1_SM103_CACHE_ABSORB=1
+BATCHGEN_R1_SM103_PROJECTION_GRAPHS=1
+BATCHGEN_R1_SM103_ALLOW_CAPTURE=0
+BATCHGEN_R1_NATIVE_TOKEN_TRACE=0
+BATCHGEN_R1_SKELETON_MMAP=1
+NCCL_RAS_ENABLE=0
+```
+
+The native server arguments retain `--disable-cuda-graphs` and select
+`fa4_flashinfer` attention. The pinned wrapper set `--host-kv-cache-size 160`
+per node for v13/v14, then192 for v15, with all other runtime flags retained. The framework flag does not disable
+the explicitly enabled local projection graphs. Paged MLA still receives
+its actual max sequence length outside capture. Deployment also retains the
+previously qualified CUDA13 toolchain, registered weights and safe process
+supervision; these settings alone are not a replacement for those gates.
+
+V14 short has now completed with512 exact8192/2048 results and zero
+failures:929.502397s and1128.104676 output tokens/s,2.2497x the original
+run. Warmup1 was308.693921s and is excluded. Compared with v13
+949.578636s, the observed additional wall reduction is2.1%; a single run
+does not establish statistical significance for that small difference.
+Admissions476/84,48 recomputes and4094 logged decode steps are unchanged.
+Decode windows were631.452s and other time298.050s; weighted step153.692ms.
+Guard/client exited0 without signals and were independently absent before
+archive transfer; the dual model services remain healthy for the next profile.
+
+V14 short archive/manifest/analysis SHA256:
+`469decca5ff2ffccb83d0ea10f444fa5a347851024e4c5719c06fd981647c9f0` /
+`9350aec8fec2d31b7f430a2fa353e395d73da1ba3361c5cc269dc22aa8c57495` /
+`9379a120de257b9ec573faf9d24469f6420402dabc3cf786e598a6f17d84d742`.
+
+After observing the full KV160 runs, a further configuration-only KV192
+experiment was prepared. Actual leader sampled minima were92.584GiB in the
+long control, and peer45-second samples reached99.691GiB. Subtracting the
+additional32GiB gives a conservative linear projection of60.584/67.691GiB,
+above the unchanged32/40GiB stop floors; this projection is not a runtime
+qualification and may miss peer transients. KV160 supplies76398 global pages.
+Scaling to192GiB predicts about91678, versus81920 pages needed for512
+requests at10240 total tokens, leaving about10.64% free against the10%
+watermark. Actual pages, resource minima, waves and output lengths must be
+measured. The KV160 scheduler control remained unchanged until its full long512
+run closed. KV192 reuses the identical canonical runtime source;
+only its explicit launcher capacity setting changes.
+
+V14 long has now completed512 exact2048/8192 results, zero failures,
+1778.013895s and2358.982690 output tokens/s. This is1.474x the same-KV160
+v13 control (32.2% less wall time), and2.953x the original v10. The actual
+first assignment is `[32]*16`, with512 sequences prepared for decode and
+none stranded PREFILLED. Its saved live log prefix was subsequently verified
+byte-for-byte against the closed archive. Both metadata corrections are
+applied together; their individual timing contributions are not isolated.
+
+The10% KV watermark nevertheless evicted84; prefill selections remain512/84
+with84 recomputed admissions. Logged decode steps fell16382→10366, since
+all84 had already generated tokens before eviction. Decode windows were
+1572.757s and other time205.257s; weighted step151.391ms. Leader available
+host memory reached93.863GiB; neither resource floor triggered. Warmup1
+was980.112342s and is excluded. Original guard/client exited0 without signals
+and were independently absent before export.
+
+V14 long archive/manifest/analysis SHA256:
+`4856d46845717e28dc47288736ae0ab5ff8476f96423989b5ec01a8fa0297e69` /
+`766df9631763a1952a43efaa18fa974be35854bcd9234375b902ac7e73755b72` /
+`f8d8cdee8b3441fd335f8a02aa5b26b42b3e5e21061e3ff86c36038adacd4765`.
+Actual complete v14 comparison SHA256:
+`1d9dccc0c4b8feea68afff41ecf139e59ce3a918bb02f71cc5a31ecaff0982c3`.
+The same-code KV192 experiment was launched after actual v14 model retirement.
+
+Source inspection also separates the two phase strategies. R1's
+`DeepseekV3ParallelStrategyManager.configure_prefill` explicitly configures
+pure DP and builds streamed weight-copy tasks for attention, shared experts
+and all routed experts. Its multi-node decode configuration instead keeps
+all16 local experts per rank persistent. The decode residency observation
+therefore does not imply that prefill has no host weight traffic. The phase
+switches remain `persistent=False`; one v15 prefill→decode transition reported
+31.918s. Total prefill weight-transfer bytes or a separate transfer/compute
+percentage were not measured. Resident-prefill parallelism and avoiding model
+reconstruction remain implementation work beyond the capacity setting.
+
+The actual KV192 global capacity is91678 pages. V15 short completed all512
+exact8192/2048 results, zero failures:535.621190s and1957.682072 output
+tokens/s. This is3.9040x the original and1.7354x the identical-code KV160
+control. Warmup1 took312.725862s and is excluded. A single prefill selected
+all512, with zero recomputed admissions; logged decode steps fell4094→2047.
+During decode all512 remained active, using81920/91678 host pages, leaving
+10.64% free. Decode windows were321.811s and other time213.810s; weighted
+step156.385ms. Larger KV improves total work/waves rather than per-step
+latency. The remaining other-time window includes prefill, model transitions
+and unclassified costs; it is not all CPU transfer or occupied GPU compute.
+Available leader host memory reached83.676GiB; no resource floor triggered.
+Guard/client exited0 without signals and were independently absent before
+export; both models remain healthy for the next profile.
+
+V15 short archive/manifest/analysis SHA256:
+`4ff4f0df0697a75dc46077b4cb8759513135cc539dd73648aca2838168bf0719` /
+`d88df7662bb4ac64d9613999903539331926c78708ff624f42afcccd5d5e2691` /
+`b30addd251b6b4dfe9661aef282bd00eb2da1f9cf9d140a96219c788cd37cf67`.
+The completed long512 control and final combined result are reported next.
+Historical numerical/NaN failures remain.
+
+V15 long completed512/512 exact2048/8192 results with zero failures: 1344.095628s and 3120.539872 output tokens/s.
+It used one prefill wave,32 requests per replica and zero recomputed
+admissions. Logged decode steps were8191; weighted step was151.455ms.
+Decode/other wall windows were1243.460/100.636s. Warmup1 was991.162247s, excluded.
+Leader host memory minimum was75.916GiB; peer45-second observations
+and unchanged resource-floor status are bound in the final comparison.
+
+V15 long archive/manifest/analysis SHA256:
+`c4680103d847343979312e639191eb4dd654b14af8681ec9bef0c55ce7b66a84` /
+`accd55c8182cd7eea12d145d159b6398f8b581e197ceaf64b03c472202c7401d` /
+`0af02dd18fbf6f0d232b37a500cc460ba0c64fe1018fb0cec649f41a0c02392b`.
+Final fresh dual-ready capture SHA256 (node0/node1):
+`0cc06d091dfcae86ad6efb1f0e808f5aee86b6f2ac3da060ddf9ce9191f58124` /
+`c61038f368e24db2d8ac75d8f5742ab8e6be7fc7ad817513cb1ef05fe218b7b3`.
+
+Native rank0 phase-transition busy timers completed within each final
+measurement reported2 switches/62.517s for the short profile and
+2 switches/58.696s for the long profile, versus8/246.596s and6/251.755s
+in the original controls. These reported busy timers overlap the wall-window
+attribution and must not be added to it.
