@@ -253,3 +253,32 @@ Failed-export import receipt SHA256:
 No successful-prefix analyzer was applied to this failed run. The512-request
 input2048/output8192 pilot remains unexecuted and was deferred for fault
 localization; it must not be recorded as completed or closed.
+
+## Large packed-prefill GEMM repair, 2026-10-24
+
+Commit `ca2d68dae2d810f9ec943ff617ee6e8fbd44e5cf` widens five W8A8 GEMM
+index vectors to int64 before stride multiplication. Dot products, FP8/F32
+scale policy, reduction and launch configuration are unchanged. Preserved
+original compiler artifacts show signed32 output-row multiplication; the
+first unsafe zero-based rows are87382 for Q(N24576) and65536 for KV(N32768).
+The original M98304 Q and KV isolated calls both raised illegal memory access.
+
+The corrected candidate completed the M2048 Q regression and M98304 KV test,
+with all50,331,648 and3,221,225,472 output elements respectively finite and
+byte-identical to low-offset original-kernel chunks. The archived corrected
+M98304 Q result likewise compared all2,415,919,104 elements bytewise. Selected
+boundary rows also have independent CPU FP64 comparisons; these synthetic
+primitive tests do not qualify whole-model accuracy. Local checks confirm
+exactly the five casts and otherwise unchanged kernel AST, and four service
+tool CPU checks pass. The packed harness's three CPU checks pass against its
+frozen original-source fixture; that fixture intentionally pins the old GEMM.
+
+Both remote model sources were still original at the new initial observation,
+and all16 GPUs were idle. Only private packed-smoke tools were transferred.
+Authentication then failed before packed-smoke dispatch, and refreshing the
+existing session did not produce authenticated cookies. Human StarAgent SSO
+completion is pending. The canonical double-node deployment, packed-layer
+runtime validation, new512 replay, quality comparison and6000-request runs
+have **not** happened in this continuation. No new BCT/throughput or quality
+pass is claimed; original strict numerical failures remain unchanged. Detailed
+private continuation state is in `.repro-private/index64-resume-20261024/STATUS.md`.
