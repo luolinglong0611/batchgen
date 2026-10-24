@@ -299,7 +299,26 @@ a final two-request tail. These costs remain included in BCT. Framework
 CUDA Graphs remain disabled, with64GiB host KV per node. This is one fixed
 length transport pilot; it does not establish model quality, representative
 full6000 warmup, repeated performance or paper reproduction. The old failed
-v4 run and strict numerical failures remain failed. The long-output512,
-paired quality and6000 experiments remain pending actual completed results.
+v4 run and strict numerical failures remain failed.
+
+The corrected long-output512 input2048/output8192 replay subsequently failed.
+Its separate one-request warmup passed exact token-count validation in
+1456.368102532 seconds, excluded from measurement. During a later recomputed
+prefill wave, the CPU-client guard observed host MemAvailable26.152393341GiB,
+below its unchanged32GiB floor, and terminated only its owned CPU client.
+The service separately reported worker rank3 exitcode-9, workers-down health503,
+NCCL aborts and a failed measured batch. A later all_gather_object attempted a
+512GiB GPU allocation during this failure; this is not evidence that the GEMM
+index repair regressed, and no kernel OOM cause is established by exitcode-9.
+
+The failed client's22-file import preserves10,937,749 original bytes, including
+the missing measurement result/summary state. Guard/import receipt SHA256 are
+`7678dea4a77411a98979c536af4cbb0c1d670de2af9bef77751bfdb41b5ab4ad` /
+`cbdd9fea18cab5ab26cc475b000bffb496e531efcacd1ccff515d322821009e2`.
+No positive analyzer, completed512 BCT or throughput was assigned. Both exact
+original service supervisors were retired after the client closed; subsequent
+audits confirmed their original sessions absent and all16 GPUs idle. A fresh
+traceON v7 quality cohort has been dispatched; paired quality and6000 results
+remain pending actual collection.
 Detailed private continuation state is in
 `.repro-private/index64-resume-20261024/STATUS.md`.
