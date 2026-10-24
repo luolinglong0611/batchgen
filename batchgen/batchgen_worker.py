@@ -2099,7 +2099,8 @@ class BatchGenWorker:
 			# Per-rank load = sum of (prompt_length ** 2) over already-assigned seqs.
 			rank_load = [0.0] * self.world_size
 			for seq in self.global_batch:
-				if seq.uuid in uuids or seq.assigned_rank is None:
+				if (seq.uuid in uuids or seq.assigned_rank is None
+						or seq.status == SequenceStatus.COMPLETED):
 					continue
 				L = getattr(seq, "prompt_length", 0) or 0
 				rank_load[seq.assigned_rank] += float(L) * float(L)
@@ -2131,7 +2132,8 @@ class BatchGenWorker:
 		# Legacy: round-robin / least-count
 		rank_counts = [0] * self.world_size
 		for seq in self.global_batch:
-			if seq.uuid not in uuids and seq.assigned_rank is not None:
+			if (seq.uuid not in uuids and seq.assigned_rank is not None
+					and seq.status != SequenceStatus.COMPLETED):
 				rank_counts[seq.assigned_rank] += 1
 
 		for uuid in uuids:
