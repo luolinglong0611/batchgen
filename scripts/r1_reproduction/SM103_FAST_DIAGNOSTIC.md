@@ -273,12 +273,33 @@ exactly the five casts and otherwise unchanged kernel AST, and four service
 tool CPU checks pass. The packed harness's three CPU checks pass against its
 frozen original-source fixture; that fixture intentionally pins the old GEMM.
 
-Both remote model sources were still original at the new initial observation,
-and all16 GPUs were idle. Only private packed-smoke tools were transferred.
-Authentication then failed before packed-smoke dispatch, and refreshing the
-existing session did not produce authenticated cookies. Human StarAgent SSO
-completion is pending. The canonical double-node deployment, packed-layer
-runtime validation, new512 replay, quality comparison and6000-request runs
-have **not** happened in this continuation. No new BCT/throughput or quality
-pass is claimed; original strict numerical failures remain unchanged. Detailed
-private continuation state is in `.repro-private/index64-resume-20261024/STATUS.md`.
+After the user restored SSO, the corrected canonical source was deployed on
+both allocated nodes, SHA256
+`b4ade5a437be8fcf4195b8e85c07d556bda4a53caea596a1276f3486b9632849`.
+The packed12x8192 layer test exited naturally with code0: all output/KV finite,
+first/last independent sequences byte-identical, input hashes unchanged. Its
+original report SHA256 is
+`57dba08885f5d355a89f1cc79e51b5c96570cb93e0b8a2414e47e2b46fa7d6bf`.
+
+The corrected traceOFF v6 two-node service completed the unchanged first512
+input8192/output2048 workload. All512 unique IDs passed raw-response
+revalidation, with4,194,304 input and1,048,576 output tokens, no failed/missing
+requests and all finish reasons `length`. Primary upload-to-complete-results
+BCT was2076.056094113 seconds and observed output rate505.080764905 tokens/s;
+secondary create-to-results was2075.797665197 seconds. Separate warmup1 took
+438.103484386 seconds and is excluded. The original guard/client exited
+naturally without cleanup signals and were independently observed absent.
+The28-file raw import preserves32,301,216 bytes; offline analysis and freeze
+index SHA256 are respectively
+`994421f2fa08e533f23b2589f2cedd99d5f7a7b6ea726094af4035c05cf4275f` /
+`96bcddedddaf772c1eb7dd66fcd562c9074ce0a99f639f52b46736905360c88e`.
+
+The service log records KV-watermark evictions, recomputed prefill waves and
+a final two-request tail. These costs remain included in BCT. Framework
+CUDA Graphs remain disabled, with64GiB host KV per node. This is one fixed
+length transport pilot; it does not establish model quality, representative
+full6000 warmup, repeated performance or paper reproduction. The old failed
+v4 run and strict numerical failures remain failed. The long-output512,
+paired quality and6000 experiments remain pending actual completed results.
+Detailed private continuation state is in
+`.repro-private/index64-resume-20261024/STATUS.md`.
