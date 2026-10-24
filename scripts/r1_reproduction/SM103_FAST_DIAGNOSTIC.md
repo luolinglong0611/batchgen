@@ -317,8 +317,53 @@ the missing measurement result/summary state. Guard/import receipt SHA256 are
 `cbdd9fea18cab5ab26cc475b000bffb496e531efcacd1ccff515d322821009e2`.
 No positive analyzer, completed512 BCT or throughput was assigned. Both exact
 original service supervisors were retired after the client closed; subsequent
-audits confirmed their original sessions absent and all16 GPUs idle. A fresh
-traceON v7 quality cohort has been dispatched; paired quality and6000 results
-remain pending actual collection.
+audits confirmed their original sessions absent and all16 GPUs idle.
+
+The fresh traceON v7 cohort subsequently completed all96 full-context quality
+responses:48 frozen questions balanced across six tasks, two draws per question,
+six sequential batches of16. The original sampling/EOS/cap and scoring rules
+were retained. All96 API records joined complete native token vectors, and all
+96 responses were extractable without failure categories. The CPU client and
+guard exited naturally with code0, no cleanup signals, and independently
+observed absence. The59-file original import receipt SHA256 is
+`58958e33ddcfc289be16afd7ec1c5b55e87b8a014a3972fd927485cb7aa7f0bd`;
+native join analysis SHA256 is
+`ee114383507096488a2b52692c0b161aa7ee9616b72dd8bde9ee0ec5567e2221`.
+
+| Engine | Task macro EM | Task macro token F1 |
+| --- | ---: | ---: |
+| Corrected BG v7 | 0.416666667 | 0.620481676 |
+| Frozen SG-B96 | 0.447916667 | 0.637503584 |
+
+The BG-minus-SG paired differences are-3.125 percentage points EM and
+-1.702191 percentage points F1. The frozen10000-draw, task-stratified question
+bootstrap averages each question's two draws before resampling. Its descriptive
+95% intervals are[-7.291667,0] percentage points EM and[-4.842618,0.849312]
+percentage points F1. No noninferiority margin or model-quality pass is inferred;
+the earlier strict numerical failures remain unchanged. Paired-score SHA256:
+`97e76c0de37eeeafcb7f58b42dcc1cbeb7aab1e5eb1e51f725fc93a9fa8317f7`.
+The original SG-B run SHA256 remains
+`89138dcf0074e4b00a68e09b7c2a7fb7b341fada815e37bd23cf0fec0ae09f6f`.
+
+After quality collection and native snapshots, idle-only smaps_rollup samples
+covered all10 processes in each original service SID. PSS totals were
+919.602612/922.506779GiB, with private clean+dirty totals179.973759/182.864304GiB.
+These are point samples of the owned service SID, not peaks or whole-machine
+physical totals. Node0's54.16-second read outlived the35-second terminal
+transport deadline; its original completed result was recovered from the
+exclusive saved stage and SHA-verified after the reader independently exited.
+Node1 completed in25.05seconds. Neither reader was replayed.
+
+An independent fresh mmap candidate has been dispatched to test the existing
+MAP_PRIVATE skeleton loader while retaining hostKV64, the corrected GEMM,
+original requests, per-profile deadlines and numeric/scoring/resource gates.
+Full-model memory and both512 replays, including full short-profile output
+parity against frozen v6, are required before larger experiments. The user
+subsequently reduced the6000 tier to1024 measured requests per profile/engine,
+one exploratory round, with unchanged input/output lengths and the exact
+original-source first1024 selection shared by BG and SG. Actual CPU inspection
+SHA256 is `d48095551a85147792f7d42c8a6d92eef82f15256e6f184760b9a1a8fbf721b1`.
+The original6000 source and unexecuted repeated protocol remain preserved.
+No mmap full-model qualification or1024 measurement result exists yet.
 Detailed private continuation state is in
 `.repro-private/index64-resume-20261024/STATUS.md`.
