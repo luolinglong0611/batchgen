@@ -19,6 +19,7 @@
 # limitations under the License.
 """ PyTorch DeepSeek model."""
 import math
+from batchgen.profiling.r1_components import scalar_item as _r1_scalar_item
 import warnings
 from typing import List, Optional, Tuple, Union
 
@@ -3287,7 +3288,7 @@ class DeepseekV3MoE_Decoding_FP8(nn.Module):
 		
 		# Handle zero tokens case
 		if isinstance(actual_num_tokens, torch.Tensor):
-			actual_num_tokens_val = actual_num_tokens.item()
+			actual_num_tokens_val = _r1_scalar_item(actual_num_tokens, 'token_count_readback')
 		else:
 			actual_num_tokens_val = int(actual_num_tokens)
 		
@@ -3303,7 +3304,7 @@ class DeepseekV3MoE_Decoding_FP8(nn.Module):
 		
 		# Handle case where no experts are activated
 		if isinstance(num_active_experts, torch.Tensor):
-			num_active_val = num_active_experts.item()
+			num_active_val = _r1_scalar_item(num_active_experts, 'active_experts_readback')
 		else:
 			num_active_val = int(num_active_experts)
 		

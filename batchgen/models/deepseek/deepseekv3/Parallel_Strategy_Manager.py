@@ -262,6 +262,8 @@ class DeepseekV3ParallelStrategyManager:
 				f"expert={timings['expert']:.1f}s, to_device={timings['to_device']:.1f}s)"
 			)
 
+		from batchgen.profiling.r1_components import install
+		install(self.model, 'prefill', self.rank)
 		return self.model, self.weight_copy_task
 	
 	def _warmup(self):
@@ -500,6 +502,8 @@ class DeepseekV3ParallelStrategyManager:
 		# Warmup compiled kernels
 		self._warmup()
 
+		from batchgen.profiling.r1_components import install
+		install(self.model, 'decode', self.rank)
 		return self.model, self.weight_copy_task
 
 	def _init_decoding_padding_bsz(self, padding_bsz):
