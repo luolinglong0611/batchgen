@@ -1,8 +1,75 @@
 # Explicit SM103 fast full-model diagnostic
 
-## Latest matched component investigation — 2026-10-25
+## Latest decode synchronization and graph investigation — 2026-10-25
 
-The optimized runtime `de7f6f0a117951a0f53ed81bfc1a6dbe65466c28` is restored on both nodes as `r1-fast-diagnostic-v18`. Fresh observations show both services healthy and idle after a completed native 8-output-token smoke. The measured optimized cohort is v17; v18 uses the same runtime bytes, flags and KV192 setting. The SGLang A v6 reference completed both 512 profiles and was retired before BG restoration.
+Both nodes now serve `r1-fast-diagnostic-v19` at runtime `b9cf8a5cb988c48a809455b1d163ff120d015033`. Both fixed 512 profiles completed and were independently imported and verified; fresh final observations show both services healthy with zero active batches or trajectories. The runtime common source map contains 435 checked files, with the existing five node0-only helper paths kept explicit.
+
+**Historical strict attention numerical and NaN-tail failures remain unresolved. This performance diagnostic does not qualify full-model numerical or semantic quality.**
+
+Hardware, TP1/EP16/DP-attention16 layout, host KV 192 GiB/node, attention backend, FP8 checkpoint, existing GEMM tiles and framework graph setting remain unchanged. The three new implementation opt-ins enable GPU row counts, local routed-MoE graphs and local-only decode expert skeletons. Both versions use the same first 512 payloads, temperature 0, ignored EOS, no inference retries, one excluded warmup per profile and short-then-long order. Each configuration/profile has one observation. SGLang was not rerun in this follow-up.
+
+| Fixed input / output tokens | Previous BG v17 (s) | BG v19 (s) | Less wall time | Output tokens/s v17 → v19 |
+|---|---:|---:|---:|---:|
+| 8192 / 2048 | 500.590 | 445.436 | 11.0% | 2094.679 → 2354.045 |
+| 2048 / 8192 | 1222.817 | 978.312 | 20.0% | 3430.034 → 4287.288 |
+
+All 1024 measured returned texts, usage objects and finish reasons match v17. Each profile has 512 successes, one prefill wave, exact forced output lengths and zero recomputed admissions. Native upload-to-complete-retrieval is the BCT boundary in both BG runs; no TTFT or TPOT is inferred.
+
+### Decode and phase boundaries
+
+| Native measurement | Short v17 → v19 | Long v17 → v19 |
+|---|---:|---:|
+| Weighted decode step (ms) | 138.351 → 113.721 | 136.493 → 107.319 |
+| Rank0 decode window (s) | 286.402 → 234.367 | 1120.829 → 881.983 |
+| Rank0 other wall window (s) | 214.188 → 211.069 | 101.988 → 96.329 |
+| Max 16-rank prefill KV-ready (s) | 157.953 → 166.389 | 42.412 → 42.056 |
+| Rank0 two switch busy timers (s) | 62.981 → 59.466 | 60.756 → 53.788 |
+
+Prefill was not optimized: the short-profile 16-rank KV-ready maximum increased from 157.953 to 166.389 seconds; the long-profile value was nearly unchanged. The wall-window partition is separate from native prefill and switch timers. Switch busy timers and prefill KV-ready boundaries overlap other classifications and cannot be added to BCT. The short profile still pays a large streamed-prefill/phase cost. Phase instances are rebuilt at each switch. This change removes unused expert construction and scale wrappers.
+
+### Actual graph coverage and local operator qualification
+
+In each measured profile, the native logs show 58 first captures on every one of the 16 ranks at 512 global padded tokens: 928 captures per profile, without repeated capture inside the measurement window. The final imported node-log prefixes independently retain the exact bytes used for this check. All matched complete decode samples use the local-graph replay path.
+
+GPU row counts keep the complete worst-case dispatch capacity and pass a GPU valid-prefix scalar to both existing quantizers. A masked inverse map excludes invalid activation/index tails. This removes the two routed-MoE host scalar readbacks per layer (116 per rank/step on the active baseline path). Gating, dispatch, expert math and weighted scatter are captured together; all-gather and all-reduce remain outside, on the caller stream. Other worker/control synchronization is not claimed removed.
+
+The real checkpoint layer 3 test passed native routing at global token counts 16/256/512/1024, worst-case local skew and empty local experts, with bitwise outputs. Dynamic inputs/routes, retained outputs, tracked source mutations/replacement, stream isolation, poisoned tails and conservative unversioned-weight fallback were checked. The profiler observed zero local scalar readbacks in three actual graph replays per case. Registered weight layouts stay fixed for the lifetime of a decode instance.
+
+| Real-weight local operator, native routing | Dynamic slice (ms/call) | GPU counts eager (ms/call) | Local graph (ms/call) | Dynamic / graph |
+|---|---:|---:|---:|---:|
+| 16 global tokens | 0.457 | 0.376 | 0.180 | 2.53x |
+| 256 global tokens | 0.618 | 0.466 | 0.368 | 1.68x |
+| 512 global tokens | 0.614 | 0.461 | 0.426 | 1.44x |
+| 1024 global tokens | 0.738 | 0.596 | 0.563 | 1.31x |
+
+These are paired local-operator timings with real weights and synthetic activations, not full-model speedups. The passing worker recorded actual captures and replays. Earlier noncontiguous-fixture and eager-fallback attempts are excluded from graph qualification and timing conclusions.
+
+The decode skeleton creates 16 local MLPs instead of 256 per MoE layer, preserving global expert indices and all local parameter contracts. Nonlocal wrappers and their GPU scale copies are skipped. Boundary-rank constructor checks passed; the full phase effect is reported in the native switch timers above.
+
+### Matched sampled components
+
+Rank0 medians below use the same matching call numbers. Every row aggregates that stage across all model layers in one sampled step. Stream intervals include host launch gaps and peer waits; CPU/stream time, nested rows and ranks must not be added.
+
+| Observed stage (ms/step) | Short v17 → v19 | Long v17 → v19 |
+|---|---:|---:|
+| Attention, stream | 55.49 → 33.74 | 52.20 → 32.78 |
+| Routed MoE parent, stream | 120.75 → 69.89 | 99.13 → 81.89 |
+| Shared expert, host call | 7.07 → 5.44 | 6.97 → 6.23 |
+| All-gather + all-reduce, stream including waits | 59.98 → 35.79 | 38.54 → 47.16 |
+| Local MoE graph span, v19 only | 26.67 | 26.14 |
+
+The attention implementation is unchanged; its lower inclusive stream median is not an isolated attention-kernel speedup. The long-profile collective median increased from 38.54 to 47.16 ms despite the lower BCT, so no communication speedup is inferred from these samples. Individual gate/GEMM/readback Python spans are not observable inside replay; missing inner timings are not zeros. The analyzer rejects partial coverage, duplicate layers and mixed eager-fallback samples. The same sampling call policy is retained, but graph replay changes probe counts. No trace-off experiment isolates instrumentation overhead. Complete-run weighted steps and BCT remain the main comparison.
+
+Host RDMA steady-window coverage and per-host rates remain in the JSON. These host counters and inclusive collective spans do not provide a pure wire-time or congestion attribution. No NCCL/NVLS or parallel-layout setting was changed.
+
+CPU checks passed 19 tests and 4 subtests. All formal CPU clients were independently closed with no inference retry. Returned-field consistency does not establish native token-ID identity or full-model quality. The experiment measures the fixed first 512 prefix, not 6000 requests.
+
+Actual all-rank data, GPU qualification, immutable source/capture evidence and final service state: [SM103_DECODE_GRAPH_RESULTS_20261025.json](SM103_DECODE_GRAPH_RESULTS_20261025.json).
+Public result SHA256: `3b262bf6944428fa857900bb96d92224c289897ed523861a1dc1c5ffce60a73e`.
+
+## Historical v16/v17 component investigation — 2026-10-25
+
+The optimized runtime `de7f6f0a117951a0f53ed81bfc1a6dbe65466c28` was restored on both nodes as `r1-fast-diagnostic-v18` and later retired for v19. Its final observations showed both services healthy and idle after a completed native 8-output-token smoke. The measured optimized cohort is v17; v18 uses the same runtime bytes, flags and KV192 setting. The SGLang A v6 reference completed both 512 profiles and was retired before BG restoration.
 
 **This remains a fast diagnostic: historical strict attention numerical and NaN-tail gates are failed and unresolved. Operator parity and returned-text consistency do not qualify full-model quality.**
 
