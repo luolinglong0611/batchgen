@@ -59,3 +59,29 @@ def test_zero_token_expert_rank_is_complete_with_zero_gemm_work():
     result=module.analyze(rows,99,101)
     assert result['per_rank']['0']['complete_steps']==1
     assert result['per_rank']['0']['stages']['down_gemm']['stream_ms']==0
+
+
+def graph_rows():
+    rows=[r for r in complete_rows() if r['stage'] in module.GRAPH_EXPECTED]
+    rows += [{**r, 'stage':'local_moe_graph'} for r in rows if r['stage']=='routed_moe']
+    return rows
+
+
+def test_graph_replay_keeps_inner_stages_unobserved():
+    result=module.analyze(graph_rows(),99,101)
+    rank=result['per_rank']['0']
+    assert rank['execution_paths']==['local_graph_replay']
+    assert rank['stages']['local_moe_graph']['stream_ms']==pytest.approx(5.8)
+    assert 'gate_up_gemm' not in rank['stages']
+    assert 'token_count_readback' not in rank['stages']
+
+
+def test_partial_duplicate_and_fallback_graph_samples_are_rejected():
+    rows=graph_rows()
+    assert not module.analyze(rows[:-1],99,101)['per_rank']
+    rows[-1]['layer']=rows[-2]['layer']
+    assert not module.analyze(rows,99,101)['per_rank']
+    fallback=graph_rows()+[r for r in complete_rows() if r['stage']=='gate' and r['layer']==3]
+    assert not module.analyze(fallback,99,101)['per_rank']
+    no_graph=[r for r in graph_rows() if r['stage']!='local_moe_graph']
+    assert not module.analyze(no_graph,99,101)['per_rank']

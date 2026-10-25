@@ -19,6 +19,10 @@ EXPECTED = {'attention': 61, 'routed_moe': 58, 'dense_mlp': 3,
             'gate_up_gemm': 58, 'quantize': 116, 'down_gemm': 58}
 DIRECT_CHILDREN = ('all_gather','gate','dispatch','experts_total',
                    'scatter_reduce','all_reduce','shared_expert')
+GRAPH_EXPECTED = {name: EXPECTED[name] for name in
+                  ('attention','routed_moe','dense_mlp','all_gather','all_reduce','shared_expert')}
+GRAPH_EXPECTED['local_moe_graph'] = 58
+GRAPH_CHILDREN = ('all_gather','local_moe_graph','all_reduce','shared_expert')
 
 
 def analyze(records, start, end):
@@ -50,33 +54,44 @@ def analyze(records, start, end):
             continue
         # Duplicate layers also reject pooled samples from multiple model
         # instances with the same call number; no averaging partial samples up.
-        optional = {'compact','active_experts_readback','gate_up_gemm','down_gemm','quantize'}
+        graphed = bool(stages.get('local_moe_graph'))
+        expected = GRAPH_EXPECTED if graphed else EXPECTED
+        optional = set() if graphed else {'compact','active_experts_readback','gate_up_gemm','down_gemm','quantize'}
         complete = all(len(stages[name]) == count and
                        {r['layer']for r in stages[name]} ==
                        (set(range(61)) if name=='attention' else set(range(3)) if name=='dense_mlp' else set(range(3,61)))
-                       for name,count in EXPECTED.items() if name not in optional)
-        active_layers = {r['layer']for r in stages['down_gemm']}
-        complete = complete and active_layers <= set(range(3,61)) and all(
-            len(stages[name]) == len(active_layers) and {r['layer']for r in stages[name]} == active_layers
-            for name in ('compact','active_experts_readback','gate_up_gemm','down_gemm'))
-        complete = complete and len(stages['quantize']) == 2*len(active_layers) and all(
-            sum(r['layer']==layer for r in stages['quantize'])==2 for layer in active_layers)
-        for name in EXPECTED:
+                       for name,count in expected.items() if name not in optional)
+        if graphed:
+            # Inner Python spans disappear on replay. Mixed eager fallback or a
+            # capture inside this sample cannot stand in for a complete replay.
+            complete = complete and not any(stages.get(name) for name in EXPECTED if name not in GRAPH_EXPECTED)
+        else:
+            active_layers = {r['layer']for r in stages['down_gemm']}
+            complete = complete and active_layers <= set(range(3,61)) and all(
+                len(stages[name]) == len(active_layers) and {r['layer']for r in stages[name]} == active_layers
+                for name in ('compact','active_experts_readback','gate_up_gemm','down_gemm'))
+            complete = complete and len(stages['quantize']) == 2*len(active_layers) and all(
+                sum(r['layer']==layer for r in stages['quantize'])==2 for layer in active_layers)
+        for name in expected:
             values.setdefault(name, {'n':0,'layers':0,'stream_ms':0.0,'cpu_ms':0.0})
         if not complete:
             rejected.append({'rank':rank,'call':call,'counts':{k:len(v)for k,v in stages.items()}})
             continue
+        sample['execution_path'] = 'local_graph_replay' if graphed else 'eager'
         sample['observed_forward_stream_ms'] = sum(values[k]['stream_ms']for k in ('attention','routed_moe','dense_mlp'))
-        sample['moe_unattributed_stream_ms'] = values['routed_moe']['stream_ms']-sum(values[k]['stream_ms']for k in DIRECT_CHILDREN)
+        children = GRAPH_CHILDREN if graphed else DIRECT_CHILDREN
+        sample['moe_unattributed_stream_ms'] = values['routed_moe']['stream_ms']-sum(values[k]['stream_ms']for k in children)
         samples.append(sample)
     ranks = {}
     for rank in sorted({s['rank']for s in samples}):
         rs = [s for s in samples if s['rank']==rank]
+        observed_names = set.intersection(*(set(s['stages']) for s in rs))
         ranks[str(rank)] = {
             'complete_steps':len(rs), 'calls':[s['call']for s in rs],
+            'execution_paths':sorted({s['execution_path'] for s in rs}),
             'median_observed_forward_stream_ms':statistics.median(s['observed_forward_stream_ms']for s in rs),
             'stages':{name:{key:statistics.median(s['stages'][name][key]for s in rs)
-                            for key in ('stream_ms','cpu_ms')}for name in EXPECTED},
+                            for key in ('stream_ms','cpu_ms')}for name in sorted(observed_names)},
         }
     return {'schema':'r1-component-measurement-analysis-v1','start_unix':start,'end_unix':end,
             'per_rank':ranks,'complete_decode_samples':samples,'rejected_partial_decode_samples':rejected,
