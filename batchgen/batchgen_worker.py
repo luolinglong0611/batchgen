@@ -20798,6 +20798,12 @@ class BatchGenWorker:
 				Glm5MoE._wgmma_shared_bufs = None
 				Glm5MoE._wgmma_next_layer_id = 0
 
+		# A frozen model cycle cannot release itself; restore collection before
+		# dropping either worker/PSM model owner and the existing final gc.collect.
+		_r1_gc_scope = getattr(self.model, '_r1_decode_gc_scope', None)
+		if _r1_gc_scope is not None:
+			_r1_gc_scope.close()
+
 		# Delete model directly without CPU transfer
 		del self.model
 		self.model = None

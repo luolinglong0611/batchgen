@@ -506,7 +506,8 @@ class DeepseekV3ParallelStrategyManager:
 		self._warmup()
 
 		from batchgen.profiling.r1_components import install
-		install(self.model, 'decode', self.rank)
+		install(self.model, 'decode', self.rank,
+		        persistent_phase_instances=getattr(self, 'persistent_phase_instances', False))
 		return self.model, self.weight_copy_task
 
 	def _init_decoding_padding_bsz(self, padding_bsz):

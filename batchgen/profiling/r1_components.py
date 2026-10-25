@@ -80,7 +80,7 @@ def _wrap_stage(fn, name):
     return wrapped
 
 
-def install(model, phase, rank):
+def install(model, phase, rank, *, persistent_phase_instances=False):
     """Install only on the exact R1 model instance, after its weights are bound."""
     global _TRACE
     directory = os.getenv('BATCHGEN_R1_COMPONENT_TRACE')
@@ -107,6 +107,8 @@ def install(model, phase, rank):
             setattr(source, name, _wrap_stage(getattr(source, name), label))
 
     if phase == 'decode':
+        from batchgen.worker.r1_decode_gc import install as install_gc
+        install_gc(model, rank, persistent_phase_instances=persistent_phase_instances)
         from batchgen.profiling.r1_decode_frames import install as install_frames
         install_frames(model, rank, torch)
 
