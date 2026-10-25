@@ -1,11 +1,96 @@
 # Explicit SM103 fast full-model diagnostic
 
-## Latest measured deployment — 2026-10-25
+## Latest matched component investigation — 2026-10-25
 
-Final cohort `r1-fast-diagnostic-v15` runs on both nodes at runtime source
+The optimized runtime `de7f6f0a117951a0f53ed81bfc1a6dbe65466c28` is restored on both nodes as `r1-fast-diagnostic-v18`. Fresh observations show both services healthy and idle after a completed native 8-output-token smoke. The measured optimized cohort is v17; v18 uses the same runtime bytes, flags and KV192 setting. The SGLang A v6 reference completed both 512 profiles and was retired before BG restoration.
+
+**This remains a fast diagnostic: historical strict attention numerical and NaN-tail gates are failed and unresolved. Operator parity and returned-text consistency do not qualify full-model quality.**
+
+All paired BG observations retain the same component sampling policy, first 512 requests, temperature 0, ignored EOS, no retries, one excluded warmup per profile and short-then-long order. All 16 physical device UUIDs match across the experiments. Each configuration/profile has one observation. BG BCT includes native upload through full result retrieval; SG BCT includes concurrent HTTP submission through all complete bodies. No TTFT/TPOT comparison is inferred.
+
+| Fixed512 profile | BG sampled baseline v16 (s) | BG optimized v17 (s) | Less BG wall | BG output tokens/s | Fresh SG A v6 (s) | BG / SG wall |
+|---|---:|---:|---:|---:|---:|---:|
+| 8192 input /2048 output | 538.696 | 500.590 | 7.1% | 1946.506 → 2094.679 | 238.004 | 2.103x |
+| 2048 input /8192 output | 1371.160 | 1222.817 | 10.8% | 3058.945 → 3430.034 | 472.929 | 2.586x |
+
+Both optimized BG profiles have 512 successes, exact forced lengths, one prefill wave and zero recomputed admissions. All 1024 measured returned texts, usage objects and finish reasons match the sampled baseline. V15 without probes was 535.621/1344.096s; v16 was 538.696/1371.160s. Those single-run differences do not isolate probe overhead. The v16→v17 pair keeps probe policy equal.
+
+### Prefill and model switching
+
+| Native measurement (seconds) | Short v16 → v17 | Long v16 → v17 |
+|---|---:|---:|
+| Max 16-rank prefill KV-ready | 157.982 → 157.953 | 42.605 → 42.412 |
+| Rank 0 two switch busy timers | 63.861 → 62.981 | 58.282 → 60.756 |
+| Rank 0 other wall window | 214.866 → 214.188 | 100.213 → 101.988 |
+
+The optimized complete-run decode windows are 286.402s (short) and 1120.829s (long); the corresponding other wall windows are 214.188s and 101.988s, or 42.8% and 8.3% of BCT. Almost all observed end-to-end reduction comes from the decode window, while the prefill/phase path remains a sizable short-profile cost. All 16 ranks and all 512 sequences are covered by native prefill metrics. Switch busy timers and prefill boundaries overlap wall-window classifications and must not be added to BCT. Pure-DP prefill still streams weights and phase changes rebuild models; these paths were not changed. No prefill MoE/attention subkernel split or host-transfer-byte estimate is claimed: the one/two prefill forwards did not reach the sampled-module cadence.
+
+### Matched decode calls
+
+The table shows rank 0 medians of complete all-layer samples at matching call numbers: 6 short and 11 long. Each row aggregates that stage across the model in one sampled step. Event intervals include host launch gaps and peer waiting; they are not occupied-SM/kernel time. Nested rows, ranks and CPU/GPU intervals must not be added. All 16 ranks are retained in the JSON.
+
+| Sampled stage (ms/step) | Short v16 → v17 | Long v16 → v17 |
+|---|---:|---:|
+| Attention, stream | 56.75 → 55.49 | 53.17 → 52.20 |
+| Routed MoE including collectives, stream | 112.33 → 120.75 | 113.10 → 99.13 |
+| Gate/up GEMM, stream | 18.60 → 13.88 | 18.52 → 13.79 |
+| Down GEMM, stream | 11.95 → 6.26 | 11.96 → 6.16 |
+| Shared expert, host call | 22.56 → 7.07 | 22.09 → 6.97 |
+| Token-count readback, host call | 25.33 → 36.29 | 22.65 → 17.53 |
+| All-gather + all-reduce, stream including waits | 42.56 → 59.98 | 42.43 → 38.54 |
+
+The optimized short sampled MoE parent median increased, while its GEMMs and shared-expert host calls improved. Across all 16 ranks, the long-profile median of rank medians fell 12.25→6.16ms for down GEMM, 18.42→13.95ms for gate/up and 21.91→6.74ms for shared-expert host calls; short-profile MoE parent rank medians rose 114.05→117.20ms. This prevents interpreting only rank 0 or improved subkernels as a universal parent-span improvement. Inclusive collective spans varied 29.34–98.18ms in the short samples and 24.68–75.33ms in the long samples. Sparse samples are not an unbiased substitute for all-step timing. Weighted complete-run decode steps fell 157.401→138.351ms and 154.821→136.493ms. A scalar readback waits on preceding queued work; its host time is not additional independent compute.
+
+The implementation changes are explicit SM103 opt-ins: independent expert/N tiles for down projection, bitwise-qualified gate/up 32x64x128 and down 16x64x128 tiles, and a per-caller-stream shared-expert CUDA graph with source/version validation and cloned outputs. Default paths remain unchanged. Real checkpoint layer 3 operator cases, dynamic graph inputs, retained outputs, weight/scale mutation, stream isolation and inactive poisoned tails were checked. The new down expert-axis kernel retains its original K loop and row masks; the tile variants were checked for bitwise outputs in the stated fixtures. These are narrower checks than full-model quality.
+
+### Isolated communication and configuration separation
+
+The valid isolated worker uses BG's actual merged native launch environment, exact `_setup_nccl_env` source, CPU StatelessProcessGroup/TCPStore bootstrap and PyNccl API. It uses the same 8 RoCE rails, GID 3,16MiB NCCL buffer, RAS 0 and automatic algorithms. Both NVLS settings produced 16 exact-validation reports and closed all GPU workers. Two earlier fixture attempts with mismatched bootstrap/environment produced zero usable timings and are excluded.
+
+At local batch 32 / world 16, all-gather input is 458752 bytes and output/all-reduce tensor is 7340032 bytes (BF16, hidden 7168). The table uses the median across rank medians.
+
+| NVLS setting | Queued all-gather (ms/op) | Queued all-reduce (ms/op) | Single-call all-gather (ms/op) | Single-call all-reduce (ms/op) |
+|---|---:|---:|---:|---:|
+| 0 | 0.100 | 0.149 | 0.316 | 0.352 |
+| 1 | 0.130 | 0.146 | 0.287 | 0.306 |
+
+Queued measurements average 200 operations with reused buffers; single calls include CPU barrier/launch alignment effects. They are isolated API references, not an exact wire-time oracle, and must not be subtracted from model spans to label the remainder as CPU waiting. NVLS 1 does not provide a consistent improvement at the formal batch 32 message sizes, and it was not enabled in the restored model. Fresh SG server info reports enable_nccl_nvls=false and enable_symm_mem=false; installed source sets NVLS 0 on this path. NVLS-off is therefore shared rather than an established explanation for the gap.
+
+Host RDMA data counters remain a separate observation. Their four-byte units follow the [Linux InfiniBand sysfs ABI](https://www.kernel.org/doc/Documentation/ABI/stable/sysfs-class-infiniband). Only complete sampled intervals inside steady decode windows are used. Counters cover host traffic, and interval averages cannot exclude bursts, latency, congestion or rank-arrival skew.
+
+| Optimized steady-window host counters | Covered seconds node 0 / node 1 | TX GB/s node 0 / node 1 | RX GB/s node 0 / node 1 | Max single-port interval direction / line rate |
+|---|---:|---:|---:|---:|
+| input8192-output2048 | 98.1 / 98.1 | 6.84 / 6.83 | 6.85 / 6.83 | 3.55% |
+| input2048-output8192 | 881.6 / 881.7 | 6.71 / 6.71 | 6.71 / 6.71 | 3.62% |
+
+These interval averages do not establish sustained link-bandwidth saturation; they also do not rule out short congestion or rank-arrival delays.
+
+| Framework setting/strategy | BG measured/restored | Fresh SG A reference |
+|---|---|---|
+| Parallel layout | TP1 / EP16 / DP-attention16 | TP16 / EP1 / DP16 with DP attention |
+| Prefill / phase strategy | Pure DP streamed weights, native microbatch up to 131072 tokens/rank, phase model reconstruction | GPU-resident TP/DP; requested global chunk 32768 becomes 2048/rank under DP attention |
+| Graph configuration | Framework graphs off; local projection and shared-expert graphs on | Whole-model graphs configured on, max batch 128 |
+| Native kernels | FA4 prefill + FlashInfer MLA decode, portable Triton FP8 projections/grouped MoE | trtllm_mla + flashinfer_trtllm MoE |
+| Capacity setting | Host KV 192 GiB/node, no observed512 eviction | GPU memory fraction .85, max running 2048 |
+| Prefix reuse / speculation | Off / off | Off / off |
+| Requested context / forced lengths |32768; same fixed payloads |32768; same fixed payloads |
+| NVLS configuration path |0 |0 |
+
+The same frozen SG command/environment is independently checked on both nodes against the earlier v5 reference. The native async-burst client has no request semaphore, and the closed raw timings independently show all 512 attempts begin before the first completed body; the candidate name c128 is not a 128-request client cap. Actual SG server info also reports per-rank chunk 2048 in both runs: native DP attention divides the requested 32768 by 16. The global max-running argument 2048 becomes 128 per DP rank. BG still publishes native model context 163840 on node 0; node 1 does not publish that field, while both frameworks receive the same requested 32768 cap and 10240-token fixed workload. Internal capacity/context metadata is not declared identical. Equal workload and physical GPUs do not isolate EP layout, graph coverage, kernel implementation or allocator/buffer settings into separate percentages. The two independent TP8 historical topology was not rerun or mixed into this single TP16 reference.
+
+The remaining measured BG costs include unchanged prefill/phase reconstruction, eager routed-MoE scalar synchronization and partial graph coverage, plus attention and collective/wait intervals. These are implementation/strategy costs beyond changing KV capacity; all 512 now remain active and no recompute is observed. The measured optimizations reduce expert GEMM and shared-expert launch costs, but do not resolve those remaining paths.
+
+CPU attribution checks passed 11 tests. Full numerical/semantic quality and native token-ID equivalence remain unqualified. This fixed first 512 prefix is the reduced experiment, not a measured 6000-request result.
+
+Actual data, all-rank matched medians, operator qualification reports, source hashes, fresh SG settings and restored-service evidence are in [SM103_COMPONENT_RESULTS_20261025.json](SM103_COMPONENT_RESULTS_20261025.json).
+Public result SHA256: `acbe33ea3bcb79ae7cb88babecddc6a97ed2202a0cf887595f93d84c4130b76a`.
+
+## Historical V15 completed pair — 2026-10-25
+
+The previous cohort `r1-fast-diagnostic-v15` was measured on both nodes at runtime source
 commit `8890115737d5356047a00f7bf28b5c7dd5efadc1`
 with host KV 192 GiB per node, the checked attention opt-ins, traceOFF and
-mmapON. Final fresh observations confirm both HTTP services healthy with
+mmapON. Its final observations confirmed both HTTP services healthy with
 no active requests. This is a **fast diagnostic performance result**:
 **historical strict numerical and NaN-padding failures remain unresolved**;
 fixed output lengths do not establish semantic quality or model equivalence.
@@ -921,3 +1006,91 @@ measurement reported2 switches/62.517s for the short profile and
 2 switches/58.696s for the long profile, versus8/246.596s and6/251.755s
 in the original controls. These reported busy timers overlap the wall-window
 attribution and must not be added to it.
+
+
+## 2026-10-25: measured component baseline and qualified MoE scheduling
+
+V16 adds opt-in, nonblocking sampled component probes to the V15 runtime;
+source commit `bca68d6bb9d0450c8594cbd3018d2e4ed45f214d`, common433 map
+`db9175ed5c92bf8ddeab049658c05c82bb01dd8d9b62dec63be126fd2f2f4e93`.
+Both512 cases completed, with exact forced lengths and zero failures.
+The external settings remain KV192, the same first512 requests, temperature0,
+ignore_eos=true, retries0, one excluded warmup per profile, short then long.
+
+| V16 baseline | 8192 input / 2048 output | 2048 input / 8192 output |
+|---|---:|---:|
+| Client upload through all results, seconds | 538.696482 | 1371.160372 |
+| Output tokens/s | 1946.506123 | 3058.944879 |
+| Weighted decode step, ms | 157.400782 | 154.821243 |
+| Native max-rank prefill KV-ready, seconds | 157.982103 | 42.604712 |
+| Rank0 switch busy timers, two transitions, seconds | 63.861 | 58.282 |
+| Rank0 prefill model configure, seconds | 20.89 | 19.06 |
+
+Native prefill covers all16 participating ranks. Rank0 model configuration
+includes skeleton construction11.0s in both cases, expert setup2.7/2.5s,
+and to-device1.6/1.2s. Configuration is part of phase switching. Switch busy
+timers and prefill boundaries overlap wall classifications; do not add these
+rows to BCT. Prefill subkernel probes did not reach their sampling cadence
+in the one/two native forwards, so no prefill MoE-versus-attention split is
+claimed. The pure-DP streamed prefill implementation and rebuilding phase
+models remain distinct from persistent EP decode.
+
+For complete sampled rank0 decode steps, median attention stream intervals
+are56.749/53.171ms and routed-MoE112.331/113.099ms. Within MoE, gate/up GEMM
+is18.605/18.518ms, down GEMM11.951/11.957ms, and shared-expert stream time
+9.402/8.521ms versus22.556/22.088ms host-call time. All-gather and all-reduce
+stream medians are27.793+15.741ms and27.728+15.024ms. These are nested,
+sampled stream elapsed intervals, including CPU launch gaps and peer arrival
+waiting, rather than occupied GPU/kernel time. They must not be summed with
+parent MoE, host durations or other ranks. Instrumented sampled steps can be
+slower than the weighted all-step average. All16 ranks have complete samples.
+Scalar token-count readback host time also waits for preceding work; its
+22–25ms cannot be interpreted as additional compute independent of GEMMs.
+
+Both host port inventories were bound to the allocated containers by all
+eight device/GUID pairs. During1027.8s of complete sampled intervals inside
+long-output steady decode, each host transmitted/received about5.87/5.88GB/s
+in aggregate across eight200Gb/s RoCE ports. The highest single-port interval
+average was3.17% of its reported direction-specific line rate. These are
+host counters, not exclusive model traffic; averages cannot rule out bursts,
+latency, congestion or arrival skew. Linux port_xmit_data/port_rcv_data count
+four-byte units, as specified by the [Linux InfiniBand sysfs ABI](https://www.kernel.org/doc/Documentation/ABI/stable/sysfs-class-infiniband).
+The short baseline predates the usable host sampler window; no short-window
+wire-rate estimate is fabricated. Native NCCL logs select RDMA, not TCP fallback.
+
+The main implementation changes were qualified in isolated SM103 GPU jobs
+using original checkpoint layer3 FP8 weights, native activation quantization
+on deterministic BF16 inputs, exact old-kernel controls and paired timings:
+
+- Down projection gives each CTA an expert/N tile instead of serially looping
+  all experts. All15 routing/tail cases were bitwise identical and finite;
+  poisoned inactive tails stayed zero. At16 active experts with8–32 tokens
+  each, same-tile stream speedup was1.50–1.61x. Single/empty expert cases
+  can regress slightly; the complete model test is still required.
+- Across nine routing cases, every tested tile retained bitwise output parity.
+  A predefined mixture of uniform8/16/32/64 and skew selects gate/up32x64x128
+  and down16x64x128. Weighted stream gains over the64x32x128 tile are1.661x
+  and1.573x respectively; the down tile gain is in addition to expert-axis
+  parallelism, not an isolated full-model gain.
+- The unchanged resident shared-expert projections and SiLU use a bounded
+  per-caller-stream CUDA graph. Batch32 host wall speedup is2.51x. B0/1/16/32/
+  17/129, dynamic inputs, retained outputs, source mutation/replacement,
+  alternate streams and unversioned-source eager fallback were checked.
+  Graph source keys include parameters, cached aliases, scales and versions;
+  returned outputs are cloned. Prefill, routing and collectives are excluded.
+
+Runtime commit `de7f6f0a117951a0f53ed81bfc1a6dbe65466c28` preserves default
+paths and enables these changes only through explicit SM103 experiment flags.
+CPU attribution tests:11 passed. Deployed kernel/helper bytes exactly match
+the completed GPU qualification fixtures.
+Historical strict attention numerical and NaN-tail gates remain failed;
+these narrower operator checks do not qualify full-model quality.
+
+Actual evidence SHA256:
+- `components-down-report.json`: `8e4995165ebecbfaea214f20553cb35b4d8d900ef2c699bba4006c12b5cd1770`.
+- `components-tiles-report.json`: `3f0e99c17b20b94555fcf9e11541955d4d123b64362824aa1ca1ffd4f4b3fdee`.
+- `components-shared-report.json`: `3bde0efad6754c6c68fc1ce8ebcba50d367d102c1c16b30b2958e47c0443ff90`.
+- `components-v16-input8192-output2048-analysis.json`: `1c2208cb1c75ea351ea2fbec451b0f31834dbd91101f1673046569971736daa1`.
+- `components-v16-input2048-output8192-analysis.json`: `ee32a29178b37f7617405bf46448019d02d7bfaf2c760241839d5019c5c89dec`.
+- `rdma-v16-input2048-output8192-analysis.json`: `9844d46998f0dcaf8da6ac14d184c47a41ea9084b263accad431f170ef68642a`.
+- `final-v16-actual512-comparison.json`: `b8b743c53acf4d71854e9840b7fa194e167710d2eb94318b1b52e53e4e0d23bc`.
