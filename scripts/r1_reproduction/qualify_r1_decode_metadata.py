@@ -68,6 +68,26 @@ def main():
     torch.cuda.synchronize()
     assert set(metadata._prepare.device_caches[torch.cuda.current_device()][0])==cache_keys,'Dynamic max length recompiled the metadata kernel'
     report['dynamic_maxlen_compile_cache_unchanged']=True
+    # A single warmup request can activate only one DP rank. Other nodes must
+    # not compile a new kernel for every page-table growth in formal decode.
+    def geometry_case(width, verify):
+        pages=8+width%5
+        geometry_cache=torch.empty((pages,64,1,576),device='cuda',dtype=torch.bfloat16)
+        geometry_lengths=torch.full((32,),(width-1)*64+1,device='cuda',dtype=torch.int32)
+        geometry_positions=(geometry_lengths.long()-1)[:,None]
+        backing=torch.arange(width*2,device='cuda',dtype=torch.int32)[None,:].expand(32,-1).clone()
+        geometry_table=backing[:,::2].remainder_(pages)
+        actual,write=metadata.prepare(geometry_cache,geometry_table,geometry_lengths,geometry_positions,width*64)
+        if verify:
+            expected=baseline._validated_block_table(geometry_cache,geometry_table,geometry_lengths,32,torch.device('cuda:0'),async_validation=True)
+            assert torch.equal(actual,expected)and torch.equal(write,geometry_positions[:,0].int())
+    for width in (33,65,129):geometry_case(width,False)
+    torch.cuda.synchronize()
+    geometry_keys=set(metadata._prepare.device_caches[torch.cuda.current_device()][0])
+    for width in range(33,161):geometry_case(width,True)
+    torch.cuda.synchronize()
+    assert set(metadata._prepare.device_caches[torch.cuda.current_device()][0])==geometry_keys,'Page-table geometry recompiled inside a warmed block size'
+    report['dynamic_geometry_compile_cache_unchanged']={'widths':list(range(33,161)),'row_stride_changes':True,'physical_page_count_changes':True,'warmed_widths':[33,65,129],'bitwise':True}
     report['metadata_profiler']={}
     for name in ('old','fused'):
         with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU,torch.profiler.ProfilerActivity.CUDA]) as profiler:

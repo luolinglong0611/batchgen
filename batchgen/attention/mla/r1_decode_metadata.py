@@ -8,11 +8,11 @@ import triton
 import triton.language as tl
 
 
-@triton.jit(do_not_specialize=["MAX_LENGTH"])
+@triton.jit(do_not_specialize=["MAX_LENGTH", "TABLE_ROW", "WIDTH", "OUTPUT_WIDTH", "PAGES"])
 def _prepare(lengths, positions, table, safe, write_positions,
-             POSITION_STRIDE: tl.constexpr, TABLE_ROW: tl.constexpr,
-             TABLE_COL: tl.constexpr, WIDTH: tl.constexpr,
-             OUTPUT_WIDTH: tl.constexpr, PAGES: tl.constexpr,
+             POSITION_STRIDE: tl.constexpr, TABLE_ROW,
+             TABLE_COL: tl.constexpr, WIDTH,
+             OUTPUT_WIDTH, PAGES,
              MAX_LENGTH, BLOCK: tl.constexpr):
     row = tl.program_id(0)
     length = tl.load(lengths + row)
