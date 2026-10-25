@@ -892,6 +892,113 @@ HAS_TENSOR_DESC = supports_tma() and hasattr(tl, "make_tensor_descriptor")
 # =============================================================================
 
 @triton.jit
+def fused_dequant_grouped_gemm_fp8_tma_parallel_kernel(
+    lhs_ptr, lhs_scale_ptr,
+    rhs_ptrs_ptr, rhs_scale_ptrs_ptr,
+    group_idx_ptr, group_sizes_ptr, group_start_indices_ptr,
+    num_active_experts_ptr,
+    output_ptr,
+    M, N: tl.constexpr, K: tl.constexpr,
+    stride_lhs_m, stride_lhs_k,
+    stride_lhs_scale_m, stride_lhs_scale_k,
+    stride_rhs_n, stride_rhs_k,
+    stride_output_m, stride_output_n,
+    stride_group_idx, stride_group_sizes, stride_group_start_indices,
+    stride_rhs_ptrs, stride_rhs_scale_ptrs,
+    GEMM_BLOCK_SIZE_M: tl.constexpr,
+    GEMM_BLOCK_SIZE_N: tl.constexpr,
+    GEMM_BLOCK_SIZE_K: tl.constexpr,
+    SCALE_BLOCK_SIZE_N: tl.constexpr,
+    SCALE_BLOCK_SIZE_K: tl.constexpr,
+):
+    """
+    TMA-optimized grouped GEMM for SM_90a (H20).
+    Same structure as baseline, but uses TMA for RHS loads.
+    """
+    lhs_dtype = tl.bfloat16
+    rhs_dtype = tl.float8e4nv
+    
+    pid = tl.program_id(axis=0)
+    num_groups = tl.load(num_active_experts_ptr)
+    
+    # N-tile for this CTA
+    offsets_n = pid * GEMM_BLOCK_SIZE_N + tl.arange(0, GEMM_BLOCK_SIZE_N)
+    
+    # Pre-calculate scale indices
+    scale_n = pid * GEMM_BLOCK_SIZE_N // SCALE_BLOCK_SIZE_N
+    num_scale_k = tl.cdiv(K, SCALE_BLOCK_SIZE_K)
+    
+    # The expert axis is independent: each CTA owns one expert/N tile.
+    # Preserve the original per-output K accumulation order and row masks.
+    g = tl.program_id(axis=1)
+    if g < num_groups:
+        # Load group metadata
+        gm = tl.load(group_sizes_ptr + g * stride_group_sizes)
+        group_idx = tl.load(group_idx_ptr + g * stride_group_idx)
+        start_idx = tl.load(group_start_indices_ptr + g * stride_group_start_indices)
+        num_sub_groups = tl.cdiv(gm, GEMM_BLOCK_SIZE_M)
+        
+        # Get RHS pointers for this expert
+        rhs_base_ptr = tl.load(rhs_ptrs_ptr + group_idx * stride_rhs_ptrs).to(tl.pointer_type(rhs_dtype))
+        rhs_scale_base_ptr = tl.load(rhs_scale_ptrs_ptr + group_idx * stride_rhs_scale_ptrs).to(tl.pointer_type(tl.float32))
+        
+        # Create TMA descriptor for RHS - KEY OPTIMIZATION
+        rhs_desc = tl.make_tensor_descriptor(
+            rhs_base_ptr,
+            shape=[N, K],
+            strides=[stride_rhs_n, stride_rhs_k],
+            block_shape=[GEMM_BLOCK_SIZE_N, GEMM_BLOCK_SIZE_K],
+        )
+        
+        # Process all M-tiles for this expert
+        for sub_group_idx in range(num_sub_groups):
+            sub_group_start_idx = start_idx + sub_group_idx * GEMM_BLOCK_SIZE_M
+            remaining_rows_in_group = start_idx + gm - sub_group_start_idx
+            valid_rows_this_block = tl.minimum(GEMM_BLOCK_SIZE_M, remaining_rows_in_group)
+            
+            offsets_m = tl.arange(0, GEMM_BLOCK_SIZE_M)
+            abs_row_indices = sub_group_start_idx + offsets_m
+            
+            # Accumulator
+            acc = tl.zeros((GEMM_BLOCK_SIZE_M, GEMM_BLOCK_SIZE_N), dtype=tl.float32)
+            
+            # K-dimension loop
+            for k_idx in range(0, tl.cdiv(K, GEMM_BLOCK_SIZE_K)):
+                offsets_k = k_idx * GEMM_BLOCK_SIZE_K + tl.arange(0, GEMM_BLOCK_SIZE_K)
+                
+                # Load LHS (standard)
+                lhs_ptrs = lhs_ptr + (abs_row_indices[:, None] * stride_lhs_m + offsets_k[None, :] * stride_lhs_k)
+                lhs_mask = (abs_row_indices[:, None] < M) & (offsets_k[None, :] < K) & (offsets_m[:, None] < valid_rows_this_block)
+                lhs = tl.load(lhs_ptrs, mask=lhs_mask, other=0.0)
+                
+                # Load RHS with TMA - HARDWARE ACCELERATED
+                offs_k = k_idx * GEMM_BLOCK_SIZE_K
+                rhs_fp8 = rhs_desc.load([pid * GEMM_BLOCK_SIZE_N, offs_k])
+                
+                # Load LHS scale
+                lhs_scale_k = k_idx * GEMM_BLOCK_SIZE_K // 128
+                l_scale_ptr = lhs_scale_ptr + (abs_row_indices[:, None] * stride_lhs_scale_m + lhs_scale_k * stride_lhs_scale_k)
+                lhs_scale = tl.load(l_scale_ptr, mask=(abs_row_indices[:, None] < M), other=1.0, cache_modifier='.cg')
+                
+                # Load RHS scale
+                scale_k = k_idx * GEMM_BLOCK_SIZE_K // SCALE_BLOCK_SIZE_K
+                scale_ptr = rhs_scale_base_ptr + (scale_n * num_scale_k + scale_k)
+                rhs_scale = tl.load(scale_ptr)
+                
+                # Fused dequantization and matmul
+                acc += tl.dot(lhs, tl.trans(rhs_fp8)) * lhs_scale * rhs_scale
+            
+            # Store result
+            offs_output_m = sub_group_start_idx + tl.arange(0, GEMM_BLOCK_SIZE_M)
+            offs_output_n = pid * GEMM_BLOCK_SIZE_N + tl.arange(0, GEMM_BLOCK_SIZE_N)
+            output_ptrs = output_ptr + (offs_output_m[:, None] * stride_output_m + offs_output_n[None, :] * stride_output_n)
+            output_mask = (offs_output_m[:, None] < M) & (offs_output_n[None, :] < N) & (tl.arange(0, GEMM_BLOCK_SIZE_M)[:, None] < valid_rows_this_block)
+            
+            output = tl.cast(acc, lhs_dtype)
+            tl.store(output_ptrs, output, mask=output_mask)
+
+
+@triton.jit
 def fused_dequant_grouped_gemm_fp8_tma_kernel(
     lhs_ptr, lhs_scale_ptr,
     rhs_ptrs_ptr, rhs_scale_ptrs_ptr,
@@ -1038,7 +1145,14 @@ def fused_dequant_grouped_gemm_fp8_tma(
     output = torch.zeros((M, N), dtype=torch.bfloat16, device=device)
     
     # Same grid as baseline
-    grid = (triton.cdiv(N, gemm_block_size[1]),)
+    flag = os.getenv('BATCHGEN_R1_SM103_PARALLEL_MOE_DOWN', '0')
+    if flag not in ('0', '1'):
+        raise ValueError('BATCHGEN_R1_SM103_PARALLEL_MOE_DOWN must be 0 or 1')
+    parallel = flag == '1'
+    if parallel and torch.cuda.get_device_capability(device) != (10, 3):
+        raise RuntimeError('Parallel R1 MoE down experiment requires SM103')
+    grid = (triton.cdiv(N, gemm_block_size[1]), group_size.numel()) if parallel else (triton.cdiv(N, gemm_block_size[1]),)
+    kernel = fused_dequant_grouped_gemm_fp8_tma_parallel_kernel if parallel else fused_dequant_grouped_gemm_fp8_tma_kernel
     
     # TMA requires special allocator
     def alloc_fn(size: int, alignment: int, stream: Optional[int]):
@@ -1047,7 +1161,7 @@ def fused_dequant_grouped_gemm_fp8_tma(
     triton.set_allocator(alloc_fn)
     
     try:
-        fused_dequant_grouped_gemm_fp8_tma_kernel[grid](
+        kernel[grid](
             lhs, lhs_scale,
             rhs_ptrs_ptr, rhs_scale_ptrs_ptr,
             activated_group_idx, group_size, group_start_indices,

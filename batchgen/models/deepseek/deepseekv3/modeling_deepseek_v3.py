@@ -63,6 +63,19 @@ import os
 import triton
 import gc
 
+def _r1_expert_tile(name):
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    allowed = {"16x32": (16,32,128), "16x64": (16,64,128),
+               "32x32": (32,32,128), "32x64": (32,64,128), "64x32": (64,32,128)}
+    if value not in allowed:
+        raise ValueError(f"Unsupported {name}={value}")
+    return allowed[value]
+
+_R1_GATE_UP_TILE = _r1_expert_tile("BATCHGEN_R1_SM103_GATE_UP_TILE")
+_R1_DOWN_TILE = _r1_expert_tile("BATCHGEN_R1_SM103_DOWN_TILE")
+
 logger = logging.get_logger(__name__)
 if is_flash_attn_2_available():
 	try:
@@ -1811,6 +1824,8 @@ class DeepseekV3MoE_Decoding_FP8(nn.Module):
 		# --- communication setup -------------------------------------------
 		self.device = torch.device("cuda", self.rank % torch.cuda.device_count())
 		self.comm_stream = torch.cuda.Stream(device=self.device)
+		if (_R1_GATE_UP_TILE is not None or _R1_DOWN_TILE is not None) and torch.cuda.get_device_capability(self.device) != (10, 3):
+			raise RuntimeError("R1 expert tile experiment requires SM103")
 
 		# --- Pre-allocate Buffers. --------------------------------
 		self.num_tokens_per_rank = None		# This is a placeholder, adjust as needed
@@ -3326,7 +3341,8 @@ class DeepseekV3MoE_Decoding_FP8(nn.Module):
 			self.up_scale_list, self.up_scale_ptrs_ptr,
 			group_size, activated_group_idx, group_start_indices,
 			num_active_experts,
-			self.experts_per_rank
+			self.experts_per_rank,
+			**({"gate_gemm_block_size": _R1_GATE_UP_TILE} if _R1_GATE_UP_TILE is not None else {})
 		)
 		
 		intermediate, intermediate_scale = act_quant(intermediate)
@@ -3337,6 +3353,7 @@ class DeepseekV3MoE_Decoding_FP8(nn.Module):
 			self.down_scale_list, self.down_scale_ptrs_ptr,
 			group_size, activated_group_idx, group_start_indices,
 			num_active_experts,
+			**({"gemm_block_size": _R1_DOWN_TILE} if _R1_DOWN_TILE is not None else {})
 		)
 		
 		return res

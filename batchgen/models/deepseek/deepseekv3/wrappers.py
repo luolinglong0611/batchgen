@@ -24,6 +24,7 @@ Provides wrappers for DeepSeek-R1 and DeepSeek-V3 models with FP8 quantization:
 """
 
 import logging
+import os
 from typing import Dict, Optional, Tuple
 
 import torch
@@ -175,7 +176,16 @@ class DeepSeekExpertWrapper(ExpertWrapperBase):
             self.module.down_proj.weight.data = self.fp8_down
 
         # Micro-batch forward
-        result = self.micro_batch_forward(hidden_states, "expert")
+        graph_flag = os.environ.get("BATCHGEN_R1_SM103_SHARED_EXPERT_GRAPHS", "0")
+        if graph_flag not in ("0", "1"):
+            raise ValueError("BATCHGEN_R1_SM103_SHARED_EXPERT_GRAPHS must be 0 or 1")
+        if graph_flag == "1" and self.persistent and self.expert_idx == -1 and self.phase == "decode":
+            if hidden_states.device.type != "cuda" or torch.cuda.get_device_capability(hidden_states.device) != (10, 3):
+                raise RuntimeError("Resident R1 shared-expert graph experiment requires SM103")
+            from batchgen.gemm.r1_shared_graph import forward as shared_graph_forward
+            result = shared_graph_forward(self, hidden_states)
+        else:
+            result = self.micro_batch_forward(hidden_states, "expert")
 
         # Cleanup for non-persistent experts
         if not self.persistent:
