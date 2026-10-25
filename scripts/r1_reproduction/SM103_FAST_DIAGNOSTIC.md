@@ -1,8 +1,86 @@
 # Explicit SM103 fast full-model diagnostic
 
-## Latest decode synchronization and graph investigation — 2026-10-25
+## Latest prefill and phase-switch investigation — 2026-10-25
 
-Both nodes now serve `r1-fast-diagnostic-v19` at runtime `b9cf8a5cb988c48a809455b1d163ff120d015033`. Both fixed 512 profiles completed and were independently imported and verified; fresh final observations show both services healthy with zero active batches or trajectories. The runtime common source map contains 435 checked files, with the existing five node0-only helper paths kept explicit.
+Both nodes serve `r1-fast-diagnostic-v20` at runtime `b7c30320363e2f9c6b18a5c6f009d9118b74ab14`. Both original fixed 512 profiles completed, their CPU clients closed independently, and final observations show both services healthy and idle. All 436 common Python sources are checked; the five existing node0-only helpers remain explicit.
+
+**Historical strict attention numerical and NaN-tail failures remain unresolved. Returned-field consistency and operator parity do not qualify full-model numerical or semantic quality.**
+
+The native server command is unchanged except cohort paths. Actual process environments differ only by the implementation opt-in `BATCHGEN_R1_PHASE_PREPARE=1` and the trace path. Hardware, TP1/EP16/DP-attention16 layout, host KV 192 GiB/node, attention backends, FP8 checkpoint/scales, existing GEMM tiles and framework graph setting remain fixed. Both profiles use the same first 512 payloads, temperature 0, ignored EOS, no inference retries, one excluded warmup and short-then-long order. One observation per profile/configuration is available. Decode sampling is unchanged; prefill event tracing now covers all native calls, with expert subspans only at layers 3/30/60. Probe overhead and run-order effects were not isolated.
+
+| Input / output tokens | BG v19 (s) | BG v20 (s) | Less wall time | Output tokens/s v19 → v20 | Frozen SGLang v6 (s) | BG v20 / SG wall |
+|---|---:|---:|---:|---:|---:|---:|
+| 8192 / 2048 | 445.436 | 431.380 | 3.2% | 2354.045 → 2430.749 | 238.004 | 1.81x |
+| 2048 / 8192 | 978.312 | 990.361 | -1.2% | 4287.288 → 4235.125 | 472.929 | 2.09x |
+
+The short profile improved by 3.2%, while the long profile regressed by 1.2%. Phase costs fell, but longer complete-run decode windows offset the saving; this is not an overall long-profile speedup.
+
+All 1024 measured returned texts, usage objects and finish reasons match BG v19. Each profile has 512 successes, one prefill wave, exact forced output lengths and zero recomputed admissions. All 16 ranks retain 58 first local-MoE captures in each actual 512 measurement window, independently checked against the later sealed log-prefix bytes. Native token-ID equality and BG/SGLang semantic equality are not established.
+
+### Repeated initialization removed
+
+The former skeleton loader CPU-dequantized the same 9 first-three-layer dense MLP weights on every worker and phase change. A read-only probe of the actual live original skeleton measured 10.425s for those 9 conversions. Node preparation now computes the exact same BF16 values once before memfd serialization; workers mmap and bind them directly. The original dictionary/storages and all other tensors remain unchanged. Only the 9 corresponding dense scale keys are removed from the worker payload. Real dense weights are bitwise equal, and a real GPU dense linear output is bitwise equal. This moves one conversion cost to cold startup; it is excluded from the formal warmup/measurement and amortizes over later switches.
+
+Native cold preparation timers were not present in the sealed logs and are not estimated. The separate CPU qualification took 10.300s.
+
+Per-phase packing copies 45023 prefill scale tensors (163062624 bytes) with one transfer, preserving every FP32 value and shape. Decode retains exactly its 3263 local/shared/attention scales (13394784 bytes); prefill-only GPU scale storage does not persist into decode. Standalone single-GPU prefill preparation measured 0.634s with individual copies versus 0.421s packed. Decode packing itself was 0.057–0.060s versus 0.041s individually; it is not a separate demonstrated decode-latency improvement. The large phase saving comes from removing repeated dense conversion. Rebuild-at-phase-boundary avoids a stale cache; GPU scale views share versioned storage.
+
+| Native measurement | Short v19 → v20 | Long v19 → v20 |
+|---|---:|---:|
+| Max 16-rank prefill KV-ready (s) | 166.389 → 158.859 | 42.056 → 42.099 |
+| Rank 0 two switch busy timers (s) | 59.466 → 35.107 | 53.788 → 30.259 |
+| Weighted complete-run decode step (ms) | 113.721 → 118.523 | 107.319 → 111.754 |
+| Rank 0 decode wall window (s) | 234.367 → 244.604 | 881.983 → 918.482 |
+| Rank 0 other wall window (s) | 211.069 → 186.776 | 96.329 → 71.879 |
+
+The rank 0 prefill model-configuration timer fell from 22.14→8.56s (short) and 19.17→7.41s (long); its skeleton-loading substep fell from 11.1/11.0s to 0.3s in both profiles. The complete-run long-profile other window shrank 24.449s, but its decode window grew 36.499s, leaving a 12.050s net regression.
+
+The wall-window partition, native prefill boundary and switch busy timers are different observations; they overlap and must not be added. Decode is not changed mathematically by this phase-preparation work. Its measured variation remains visible rather than being attributed to phase optimization.
+
+### Weight movement versus prefill execution
+
+The existing compiled C++ counter records actual H2D bytes and elapsed blocking-copy calls. Consumer counters record the time inside `get_weights`; selected-layer events separate the expert forward from weight readiness and release. Copy-daemon work overlaps compute, and its elapsed intervals include host scheduling/CUDA completion. These are not hardware-only DMA measurements or occupied-SM time.
+
+| Rank 0 native phase counters | Short 512 | Long 512 |
+|---|---:|---:|
+| Routed-expert actual H2D bytes (TB, decimal) | 1.308170 | 0.654261 |
+| Routed-expert blocking copy elapsed (s) | 25.958120 | 13.353660 |
+| Routed-expert consumer wait (s) | 0.028860 | 0.013769 |
+
+| Rank 0 observed prefill stream intervals (s) | Short 512 | Long 512 |
+|---|---:|---:|
+| attention (all layers/calls) | 47.940 | 11.741 |
+| routed_moe (all layers/calls) | 103.661 | 29.932 |
+| dense_mlp (all layers/calls) | 0.363 | 0.086 |
+| prefill_weight_wait (only layers 3/30/60, nested) | 0.046 | 0.024 |
+| prefill_expert_compute (only layers 3/30/60, nested) | 4.539 | 1.275 |
+| prefill_weight_release (only layers 3/30/60, nested) | 0.029 | 0.016 |
+
+All 16-rank consumer waits across all module types ranged 0.036289–0.046317s (short) and 0.019473–0.024742s (long). Actual transfer volume is large, but the readiness waits show whether it is exposed on the consumer path. Selected expert spans are nested in routed-MoE and cannot be extrapolated to all 58 layers or added to the parent. The remaining prefill priority is the expert compute/launch path and its serial per-expert execution. Source inspection confirms one active-expert loop, per-expert completion/release and portable FP8 projections with repeated activation quantization. No unmeasured PCIe, RDMA or pure-kernel fraction is claimed.
+
+### Remaining SGLang gap
+
+SGLang was **not rerun** in this iteration. The table uses the sealed actual v6 first 512 control on the same 16 GPU UUIDs, with 238.004s and 472.929s end-to-end walls. SGLang uses TP16/DP-attention16/EP1, resident weights, framework graphs, TRT-LLM MLA/MoE paths and an effective 2048-token prefill chunk per rank. BG retains its TP1/EP16 layout, pure-DP streamed prefill, FA4/FlashInfer MLA, portable general-FP32-scale FP8 GEMMs, 131072-token prefill microbatch ceiling and framework graphs disabled. These are explicit configuration/execution-layout and backend differences, not isolated causal speedup percentages. Original FP8 checkpoint selection does not establish identical arithmetic across backends.
+
+The optimized long-profile BG decode window is 918.482s; SGLang's entire frozen long-profile wall is 472.929s. Reducing model-switch costs cannot close that decode gap. Matched complete-step event samples remain in the JSON for attention, local MoE graph, shared expert and collectives. Collective intervals include peer/host waits; individual inner graph GEMMs are not observable in replay. Host RDMA counters are nonexclusive, so neither pure wire time nor network congestion is inferred.
+
+| Matched rank 0 stream median (ms/step) | Short v19 → v20 | Long v19 → v20 |
+|---|---:|---:|
+| Attention | 33.744 → 34.035 | 32.782 → 32.089 |
+| Local MoE graph | 26.669 → 26.312 | 26.144 → 26.253 |
+| All-gather + all-reduce, including waits | 35.794 → 69.905 | 47.159 → 39.099 |
+
+Local-MoE graph and attention samples do not show a corresponding kernel slowdown. Collective intervals vary substantially, and the long-profile sampled median improves despite the slower complete-run mean. The sparse samples therefore cannot explain the complete 36.499s decode increase or assign it to scale storage, one operator, PCIe, or the fabric. The 4.1% long decode-step regression remains unisolated; no causal claim is made from one run. These measurements retain the same call numbers in both versions across all 16 ranks.
+
+The evidence therefore separates a demonstrated repeated-initialization defect from a mostly overlapped weight stream and from the remaining prefill/decode kernel, graph-coverage and parallel-layout gaps. Further prefill work should target expert batching/grouped projection execution while preserving original scales and checking output parity. Further decode attribution requires graph/attention and collective-path measurements; the frozen SG wall alone cannot assign exact component causes.
+
+CPU tests: 18 distinct cases passed across local and remote Torch environments. Real 9-weight CPU parity, all four real GPU scale-layout cases and dense GPU output parity passed. All formal CPU clients are closed, both optimized services are healthy and idle, and no inference retry occurred.
+
+[Machine-readable evidence](SM103_PREFILL_SWITCH_RESULTS_20261025.json), [phase-weight qualification](qualify_r1_phase_weights.py), [prefill attribution analyzer](analyze_r1_prefill_weights.py). JSON SHA256: `9b82bfda4874fc2be357125975e0830a9de72dce68cf4f8540b9fae05402f161`.
+
+## Previous decode synchronization and graph investigation — 2026-10-25
+
+At the previous checkpoint, both nodes served `r1-fast-diagnostic-v19` at runtime `b9cf8a5cb988c48a809455b1d163ff120d015033`. Both fixed 512 profiles completed and were independently imported and verified; fresh final observations show both services healthy with zero active batches or trajectories. The runtime common source map contains 435 checked files, with the existing five node0-only helper paths kept explicit.
 
 **Historical strict attention numerical and NaN-tail failures remain unresolved. This performance diagnostic does not qualify full-model numerical or semantic quality.**
 
