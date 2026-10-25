@@ -1,8 +1,271 @@
 # Explicit SM103 fast full-model diagnostic
 
-## Latest prefill and phase-switch investigation — 2026-10-25
+## Latest decode GC lifecycle and long-output investigation — 2026-10-26
 
-Both nodes serve `r1-fast-diagnostic-v20` at runtime `b7c30320363e2f9c6b18a5c6f009d9118b74ab14`. Both original fixed 512 profiles completed, their CPU clients closed independently, and final observations show both services healthy and idle. All 436 common Python sources are checked; the five existing node0-only helpers remain explicit.
+Both nodes serve `r1-fast-diagnostic-v23` at runtime `237b7c4ad15ab5c340952c11d72aaf3b92395d8e`. Both actual 512-request profiles completed, their original CPU clients closed independently, and final observations show both services healthy and idle. All 439 common Python sources are bound to the deployed source map. The same 16 physical GPU UUIDs were checked against the frozen SGLang control.
+
+**Historical strict attention numerical and NaN-tail failures remain unresolved. Returned-field consistency and operator/lifecycle checks do not qualify full-model numerical or semantic quality.**
+
+| Input / output tokens | Original BG v20 (s) | Metadata/JIT BG v22 (s) | Scoped-GC BG v23 (s) | Less wall vs v20 | Less wall vs v22 | Frozen SGLang (s) | v23 / SG wall |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 8192 / 2048 | 431.380 | 389.274 | 393.311 | 8.8% | -1.0% | 238.004 | 1.65x |
+| 2048 / 8192 | 990.361 | 893.231 | 891.122 | 10.0% | 0.2% | 472.929 | 1.88x |
+
+The demonstrated end-to-end improvement comes from the metadata/JIT changes: v22 reduced both profile walls by about 9.8% against v20. **The additional v23 GC experiment has no demonstrated throughput benefit**: short wall increased 1.04%, long wall decreased only 0.24%, and each result is a single observation. The measured v23 cohort remains deployed for reproducibility; its GC policy is an explicit diagnostic opt-in and remains off by default in the implementation. These results do not justify promoting that policy as a default performance optimization.
+
+The v22→v23 control changes one implementation opt-in, `BATCHGEN_R1_SM103_FREEZE_DECODE_GC=1`, with four runtime source changes for the scope and lifecycle hooks. Actual native commands and planned environments match apart from cohort paths; observed process environments add only that opt-in. Hardware, TP1/EP16/DP-attention16, host KV 192 GiB/node, original FP8 weights/scales, attention/GEMM backends, existing tiles, framework graphs, component/frame sample cadence and forced workload parameters stay fixed. The first512 payload hashes, temperature0, ignored EOS, zero inference retries, one excluded warmup and short-then-long order remain exact. Each configuration/profile has one observation; no confidence interval or randomized run order is available.
+
+All 1024 measured returned texts, usage objects and finish reasons match both v20 and v22. Every profile has 512 successes, exact output lengths, one prefill wave and zero recomputed admissions. All 16 ranks retain 58 first local-MoE captures in each actual measurement window, checked against later sealed log-prefix bytes; complete component samples use local graph replay. Native token-ID and BG/SGLang semantic equality are not established.
+
+### Implementation bottlenecks and the scoped GC experiment
+
+The earlier change fused repeated length/position assertions, page coverage and physical bounds, safe-tail zeroing, odd-width padding and write-position conversion into one checked metadata kernel per layer. It keeps exact bounds and original FlashInfer/GEMM arithmetic. The intermediate v21 then exposed geometry specialization: node1 published 48 unique `_prepare` cache entries during the formal long measurement, versus zero on node0. A one-request warmup activates node0's DP request and does not prewarm node1. v22 makes width, row stride, output width and physical capacity runtime arguments. The GPU contract verifies unchanged compile-cache keys across 128 widths with changing geometry; no extra warmup requests were added.
+
+Repeated JIT explains part of the tails, but not every seconds-long CPU frame. A native-stack sample of rank0 during **v22's excluded single-request long warmup** recorded 207 `gc_collect_main` observations in 1476 active stack samples. The sampler ended before formal measurement. This demonstrates cyclic-GC work on the model/process object graph; it is not a 14% formal-B32 or historical-stall attribution. v22 sampled host calls reached 5294.781ms, with thread CPU reaching 5247.114ms; the sampled runqueue p95 was only 0.024685ms.
+
+v23 performs one full collection after the first successful decode forward, then freezes the currently stable tracked objects. Reference counting and automatic collection of newly allocated cycles stay enabled. The worker unfreezes before dropping both worker and parallel-manager model references, and keeps the original final collection. Existing foreign freeze/disabled policies are left to their owner; persistent model instances are rejected for this opt-in. First-call preparation remains inside native full-run timing. These are diagnostic lifecycle changes, not GPU arithmetic changes. See the [CPython GC interface](https://docs.python.org/3.11/library/gc.html).
+
+Real-CPython tests cover frozen-cycle release, normal young-cycle collection, acyclic reference counting, existing-policy ownership, original forward exceptions and the actual worker teardown method. The isolated real-GPU test checks 21 dynamic CUDA-graph replays bitwise, young GPU-cycle collection, acyclic GPU release, and weak-reference release of the model and all model GPU tensors through the actual teardown body. It leaves automatic GC enabled and zero frozen objects. This is a small synthetic lifecycle test, separate from unchanged original-weight attention/MoE qualifications.
+
+### Complete native decode and phase costs
+
+| Native full-run observation | Short v22 → v23 | Long v22 → v23 |
+|---|---:|---:|
+| Weighted decode step (ms) | 96.570 → 98.177 | 99.289 → 98.585 |
+| Forward host launch (ms/step) | 63.435 → 65.647 | 63.642 → 64.192 |
+| Rank0 decode window (s) | 199.332 → 202.684 | 816.407 → 810.559 |
+| Rank0 other window (s) | 189.942 → 190.627 | 76.823 → 80.563 |
+| Max 16-rank prefill KV-ready (s) | 158.106 → 157.993 | 42.087 → 42.445 |
+| Rank0 two switch busy timers (s) | 37.822 → 38.478 | 33.957 → 38.339 |
+
+All 2047/8191 native decode steps remain represented, including initial graph capture, scope preparation and stall maxima. The decode/other wall partition, overlapping switch busy timers, prefill boundaries and nested component spans must not be added. Sampled frame distributions can alias the128-token page-growth/control cadence because samples occur every16th forward; they are not unbiased per-step latency or tail-frequency estimates. End-to-end wall and complete rolling-window weighted steps remain primary.
+
+The GC tradeoff is visible in the complete long-run windows: the maximum forward in windows after the first heartbeat fell from 5302.3ms to 3034.3ms, while the maximum over the entire measurement increased from 5302.3ms to 16099.8ms. The first window includes graph/setup work and GC preparation; its maximum is not an isolated GC duration. Long-run model-free timers also increased from 8.3s to 12.1s. The largest non-component-probed sampled host call fell from 5294.8ms to 777.7ms, but that sampled maximum cannot establish full-step tail frequency or a stable production tail improvement. The experiment moves and reduces some observed pauses; it does not eliminate them.
+
+### Actual GC lifecycle and scheduling observations
+
+The sealed native logs prove one activation per rank per measured decode, first forward=1, complete2047/8191 forward coverage, automatic young collection enabled, and a following close with zero remaining frozen objects. A close completing after the primary client wall remains explicitly timed in the JSON. Per-rank GC spans overlap GPU work and other ranks; their totals are not an exact BCT saving.
+
+| Scope observation across16 ranks, median / maximum | Short | Long |
+|---|---:|---:|
+| Full-generation GC before freeze (ms) | 405.763 / 1108.107 | 1255.162 / 5734.633 |
+| Full-generation GC while frozen, cumulative (ms) | 1813.354 / 2261.166 | 8268.657 / 9210.215 |
+| Largest full-generation GC while frozen (ms) | 434.313 / 504.243 | 1862.675 / 2511.410 |
+| Full-generation collections while frozen | 11.000 / 11.000 | 12.000 / 12.000 |
+
+| Non-component-probed forward observation, pooled median / p95 (ms) | Short v23 | Long v23 |
+|---|---:|---:|
+| Host call | 50.665 / 85.543 | 51.401 / 85.648 |
+| Thread CPU | 50.133 / 84.128 | 50.880 / 84.474 |
+| Off-CPU | 0.531 / 1.094 | 0.537 / 1.098 |
+| OS runqueue wait | 0.000 / 0.028 | 0.000 / 0.021 |
+| Inclusive GPU stream | 85.286 / 91.771 | 85.320 / 92.778 |
+
+Thread CPU includes Python and driver submission. Off-CPU also includes blocking driver work; it is not synonymous with waiting for OS scheduling. The direct schedstat runqueue observations isolate that OS component in sampled frames. Historical v19/v20 have no equivalent per-frame GC/runqueue observations, so their earlier4.1% long-step regression cannot be uniquely reconstructed from sparse legacy samples.
+
+### Communication waits and remaining kernel/graph costs
+
+The task's separate two-node16-rank PyNccl reference retains the actual worker NCCL setup, eight RoCE rails, GID3, NVLS/RAS disabled and the B32×7168 BF16 communication shapes. Across-rank medians were0.102ms for balanced all-gather and0.150ms for balanced all-reduce. Giving rank0 a requested1ms enqueue delay expanded them to1.092/1.098ms. In-model collective events therefore include rank-arrival skew and host submission gaps. The independent reference cannot be subtracted as exact network wait, and nonexclusive host RDMA counters do not establish fabric congestion. Initial failed environment-only probes remain excluded.
+
+| Matched rank0 component median (ms/step) | Short v22 → v23 | Long v22 → v23 |
+|---|---:|---:|
+| Attention, stream | 27.549 → 27.323 | 26.171 → 25.921 |
+| Attention, CPU | 31.508 → 31.505 | 31.739 → 31.801 |
+| Local MoE graph, stream | 26.074 → 26.006 | 26.287 → 26.227 |
+| Shared expert, CPU | 5.664 → 5.523 | 5.638 → 5.684 |
+| All-gather + all-reduce, including waits | 45.681 → 29.043 | 58.209 → 39.400 |
+
+The GC control uses identical expanded probe calls across all16 ranks in v22/v23. The v20 comparison separately uses the historical sparse-call intersection. Inner GEMMs are inside replay and are not individually observed. Partial per-layer graphs, weight/source guards, attention host submission and the portable FP8 local-MoE path remain measured implementation costs. Prefill retains streamed expert execution; no new weight arithmetic or model-switch shortcut is used.
+
+SGLang was **not rerun**. Its sealed actual v6 first512 control on the same GPU UUIDs took238.004/472.929s. It uses TP16/DP-attention16/EP1, resident weights, framework graphs, TRT-LLM MLA/MoE and effective prefill chunks of2048 tokens/rank. BG keeps TP1/EP16, streamed pure-DP prefill, FA4/FlashInfer MLA, portable general-FP32-scale FP8 projections, the131072-token microbatch ceiling and framework graphs disabled. These layout, configuration and backend differences remain unisolated and cannot be assigned causal percentages from frozen end-to-end walls. BG's optimized long decode window is 810.559s versus SG's entire frozen 472.929s wall; further switch-cost reduction alone cannot explain the decode difference.
+
+Validation:19 local tracing/analysis/GC tests passed; all4 GC lifecycle contracts passed remotely on CPython3.11.15; the real CUDA-graph lifecycle checks passed. Existing original-weight metadata/attention qualifications remain bound to identical kernel sources. All formal clients closed, both services are healthy and idle, and no inference retry occurred. Native client outputs remain authoritative despite local auth-monitoring interruptions; read/archive collection resumed the original jobs. This remains a fixed-first512 diagnostic rather than a6000-request experiment or a full numerical-quality pass.
+
+[Machine-readable evidence](SM103_DECODE_GC_RESULTS_20261026.json), [scoped GC implementation](../../batchgen/worker/r1_decode_gc.py), [GPU lifecycle qualification](qualify_r1_decode_gc.py), [GC lifecycle analyzer](analyze_r1_decode_gc.py). JSON SHA256:`063be60720ab2f17c06c7adfd429d8e5cd339c4904b1f593f83da11311764fed`.
+
+## Intermediate long-decode JIT fix — 2026-10-25/26
+
+At the intermediate checkpoint, both nodes served `r1-fast-diagnostic-v22` at runtime `11717f88baf6e87d77a4832ab653d95ecb0a4c33`. Both actual 512-request profiles completed, all formal CPU clients closed independently, and final observations show both services healthy and idle. All 438 common Python sources are bound to the deployed source map. The same 16 GPU UUIDs were checked against the frozen SGLang control.
+
+**Historical strict attention numerical and NaN-tail failures remain unresolved. Returned-field consistency and real-layer parity do not qualify full-model numerical or semantic quality.**
+
+Hardware, TP1/EP16/DP-attention16 layout, host KV 192 GiB/node, original FP8 tensors/scales, attention/GEMM backends, tile sizes, framework graphs and native server command remain fixed apart from cohort paths. Two implementation/measurement opt-ins enable fused checked metadata and decode diagnostics. The actual worker environment was compared against v20. Both profiles retain exactly the same first 512 payloads, temperature 0, ignored EOS, no inference retries, one excluded warmup and short-then-long order. There is one observation per configuration/profile; expanded sampling overhead and run order are not isolated.
+
+| Input / output tokens | BG v20 (s) | BG v22 (s) | Less wall time | Output tokens/s v20 → v22 | Frozen SGLang v6 (s) | BG v22 / SG wall |
+|---|---:|---:|---:|---:|---:|---:|
+| 8192 / 2048 | 431.380 | 389.274 | 9.8% | 2430.749 → 2693.672 | 238.004 | 1.64x |
+| 2048 / 8192 | 990.361 | 893.231 | 9.8% | 4235.125 → 4695.656 | 472.929 | 1.89x |
+
+All 1024 measured returned texts, usage objects and finish reasons match BG v20. Every profile has 512 successes, exact forced output lengths, one prefill wave and zero recomputed admissions. Every rank retains 58 first local-MoE captures per actual measurement window, checked again against the later sealed log-prefix bytes; all complete decode samples use local graph replay. Native token-ID equality and BG/SGLang semantic equality are not established.
+
+### Demonstrated implementation cost and fix
+
+The previous MLA decode path repeated Torch operations for length/position assertions, page coverage and physical-page bounds, used-page masks, safe unused-tail zeroing, odd-width padding and write-position conversion in all 61 layers at every step. These operations added allocations and many host submissions even with asynchronous validation already enabled. One checked Triton metadata kernel now performs those operations together. It preserves exact sequence bounds, validates each call and ignores unused negative tail sentinels while zeroing the safe output. It does not cache mutable metadata or round sequence lengths. FlashInfer attention, original projection weights/scales and collective algorithms are unchanged.
+
+The intermediate v21 version exposed a second implementation defect. A single-request warmup activates only node 0's DP request, while node 1 sees new table geometries during the formal long run. Its compile cache gained 48 unique `_prepare` entries during that measurement, versus zero on node 0. Width, row stride, safe-output width and physical-page count were compilation constants. They are now runtime scalar arguments with specialization explicitly disabled. The vector block size remains the same shape bucket as before. No extra warmup requests or worker prewarm were added.
+
+The new GPU contract warms widths 33/65/129 once, then verifies bitwise safe-table/write-position parity across all 128 widths 33..160 with changing row strides and physical capacities, asserting identical compile-cache keys. Exact sequence-bound checks, all metadata validations and source immutability remain enforced.
+
+Layer 0 uses verified original checkpoint weights with synthetic activations and metadata. Its outputs and updated KV are bitwise equal in all four tested batch/length cases, including changed dynamic inputs. Ten metadata-layout cases cover batches 1/32, widths 1/2/3/129/160 and noncontiguous tables. Four separate owned GPU children reject invalid position, length, coverage and physical-page metadata through device assertions. Thirty-two changing maximum sequence bounds leave the warmed Triton compile-cache keys unchanged. This check covers changing sequence bounds at fixed geometry, not arbitrary table geometries. The old GPU profiler event capture was incomplete and is not used to claim a kernel-count ratio.
+
+| Real-layer paired host median (ms/call) | Previous | Fused |
+|---|---:|---:|
+| B1, L2048 | 0.736 | 0.451 |
+| B32, L2048 | 0.748 | 0.468 |
+| B32, L8192 | 0.717 | 0.464 |
+| B32, L10240 | 0.704 | 0.460 |
+
+These are paired real-layer microbenchmarks, not extrapolated full-model speedups. Full-run measurements below include first captures, setup and stalls.
+
+| Native complete-run observation | Short v20 → v22 | Long v20 → v22 |
+|---|---:|---:|
+| Weighted decode step (ms) | 118.523 → 96.570 | 111.754 → 99.289 |
+| Forward host launch (ms/step) | 90.639 → 63.435 | 84.230 → 63.642 |
+| Rank 0 decode window (s) | 244.604 → 199.332 | 918.482 → 816.407 |
+| Rank 0 other window (s) | 186.776 → 189.942 | 71.879 → 76.823 |
+| Max 16-rank prefill KV-ready (s) | 158.859 → 158.106 | 42.099 → 42.087 |
+| Rank 0 two switch busy timers (s) | 35.107 → 37.822 | 30.259 → 33.957 |
+
+The prior v19→v20 long decode step increased from 107.319 to 111.754ms. That historical pair has no per-frame thread/runqueue observations; its approximately 4.1% step regression cannot be uniquely attributed to OS scheduling, network congestion or a kernel from sparse historical samples. The current fix demonstrates a removable implementation cost and reports its measured effect without assigning an unsupported historical cause. Native window rows retain all 2047/8191 steps and each rolling maximum. Window means and maxima do not reconstruct per-step tail frequency.
+
+### Communication arrival waits, scheduling and CPU work
+
+A separate two-node 16-rank PyNccl reference used the same worker NCCL setup, eight RoCE rails, GID 3, NVLS/RAS disabled and unchanged algorithms. It uses BF16 local B32×7168, 458752-byte gather input and 7340032-byte global/reduce buffers. Each case has 16 warmups and 128 observations. Across-rank medians:
+
+| Operation | Balanced stream interval (ms) | Rank 0 requested 1ms enqueue delay (ms) |
+|---|---:|---:|
+| All-gather | 0.102 | 1.092 |
+| All-reduce | 0.150 | 1.098 |
+
+The controlled late arrival expands collective event intervals without changing the transport configuration. In-model collective intervals therefore include arrival skew and CPU submission gaps. They are not pure wire time; the standalone balanced reference must not be subtracted from model intervals as an exact wait decomposition. The first isolated probe lacked the complete worker environment, failed initialization and is excluded; both owned failed process families were closed before the valid reference ran.
+
+Every 16th model forward records local thread CPU time, wall time and `/proc/thread-self/schedstat` runqueue delay, plus GPU event intervals harvested through query without an added device wait. The table pools all 16 ranks after excluding frames with component probes. Samples per rank and aligned logical-call observations remain in the JSON. Forward wall excludes sampling/readback after the model. Off-CPU includes driver blocking; thread CPU includes Python and driver submission.
+
+| Non-component-probed forward observation, median / p95 (ms) | Short | Long |
+|---|---:|---:|
+| Host call | 50.525 / 84.896 | 51.259 / 86.640 |
+| Thread CPU | 49.971 / 83.519 | 50.725 / 85.400 |
+| Off-CPU | 0.533 / 1.083 | 0.541 / 1.105 |
+| OS runqueue wait | 0.000 / 0.020 | 0.000 / 0.025 |
+| Inclusive GPU stream | 84.900 / 91.760 | 85.833 / 92.844 |
+
+The fixed16-step cadence can alias the 128-token page-growth/control cadence; sampled distributions are not unbiased full-step latency or stall-frequency estimates. Complete native weighted windows and BCT remain primary. These direct OS observations distinguish waiting to be scheduled from active host work in sampled frames. They do not prove that every unsampled stall has the same cause. The per-rank and matched-call data should be used alongside complete rolling-window means, rather than adding overlapping CPU, stream, collective and nested graph intervals.
+
+| Matched rank 0 component median (ms/step) | Short v20 → v22 | Long v20 → v22 |
+|---|---:|---:|
+| Attention, stream | 34.035 → 27.306 | 32.089 → 25.332 |
+| Attention, CPU | 51.185 → 33.670 | 51.367 → 32.162 |
+| Local MoE graph, stream | 26.312 → 26.536 | 26.253 → 26.716 |
+| Shared expert, CPU | 5.888 → 6.190 | 6.226 → 5.670 |
+| All-gather + all-reduce, including waits | 69.905 → 41.309 | 39.099 → 34.832 |
+
+Only the intersection of identical logical probe calls is used for v20/v22 component comparison; v22 has additional probes. Sparse component medians are separate from complete-run weighted steps. Inner MoE GEMMs remain inside graph replay and are not individually observed. Host RDMA counters are nonexclusive and do not establish fabric congestion.
+
+### Remaining SGLang gap
+
+SGLang was **not rerun** in this iteration. The table uses the sealed actual v6 first-512 control on the same 16 GPU UUIDs. SGLang uses TP16/DP-attention16/EP1, resident weights, framework graphs, TRT-LLM MLA/MoE paths and effective prefill chunks of 2048 tokens/rank. BG retains TP1/EP16, streamed pure-DP prefill, FA4/FlashInfer MLA, portable general-FP32-scale FP8 GEMMs, the 131072-token prefill microbatch ceiling and framework graphs disabled. Those configuration, layout and backend differences remain unisolated; the frozen wall comparison cannot assign them causal percentages.
+
+The optimized long BG decode window alone is 816.407s versus SGLang's entire frozen 472.929s wall. The long-profile full-run step changed by 11.2% versus v20. Short/long first-capture and stall maxima remain explicit in the native window evidence; they are included in the complete-run means.
+
+
+An excluded long-warmup native-stack sample recorded 207 `gc_collect_main` observations out of 1476 active stack samples. The sampler finished before formal measurement, and the runtime environment was unchanged. This is evidence for cyclic-GC scan cost on the warmed model object graph, not an exact formal-B32 or historical-stall percentage. Repeated JIT explains only part of the long tails. Further work should scope stable model objects out of repeated cyclic scans while preserving young-cycle collection and restoring collection before model release. Per-layer host/attention submission, graph guards and streamed-prefill expert batching also remain. Collectives should be evaluated with rank arrival alignment before changing network settings. A broader stable-shape graph requires preserving metadata validity and dynamic output ownership. Model-switch costs remain measured separately and cannot account for the entire long decode gap.
+
+Validation: 12 local tracing/analysis tests and 5 remote CPU FakeTensor empty-GEMM tests passed; real-weight GPU checks are recorded above. All formal CPU clients closed, both services remain healthy and idle, and no inference retry occurred. Full-model quality remains unqualified.
+
+[Machine-readable evidence](SM103_DECODE_JIT_RESULTS_20261025.json), [real-layer qualification](qualify_r1_decode_metadata.py), [collective reference](benchmark_r1_collective_floor.py), [frame analyzer](analyze_r1_decode_frames.py), [native-window analyzer](analyze_r1_decode_windows.py). JSON SHA256: `77ad88952c6188211158619deb8ec5d401e333cf56e7202db0397da7bd78b409`.
+
+## Intermediate decode metadata investigation — 2026-10-25
+
+At the intermediate checkpoint, both nodes served `r1-fast-diagnostic-v21` at runtime `d1f0a827957aba7c81106c269091f510d57c6cd3`. Both actual 512-request profiles completed, all formal CPU clients closed independently, and final observations show both services healthy and idle. All 438 common Python sources are bound to the deployed source map. The same 16 GPU UUIDs were checked against the frozen SGLang control.
+
+**Historical strict attention numerical and NaN-tail failures remain unresolved. Returned-field consistency and real-layer parity do not qualify full-model numerical or semantic quality.**
+
+Hardware, TP1/EP16/DP-attention16 layout, host KV 192 GiB/node, original FP8 tensors/scales, attention/GEMM backends, tile sizes, framework graphs and native server command remain fixed apart from cohort paths. Two implementation/measurement opt-ins enable fused checked metadata and decode diagnostics. The actual worker environment was compared against v20. Both profiles retain exactly the same first 512 payloads, temperature 0, ignored EOS, no inference retries, one excluded warmup and short-then-long order. There is one observation per configuration/profile; expanded sampling overhead and run order are not isolated.
+
+| Input / output tokens | BG v20 (s) | BG v21 (s) | Less wall time | Output tokens/s v20 → v21 | Frozen SGLang v6 (s) | BG v21 / SG wall |
+|---|---:|---:|---:|---:|---:|---:|
+| 8192 / 2048 | 431.380 | 391.279 | 9.3% | 2430.749 → 2679.871 | 238.004 | 1.64x |
+| 2048 / 8192 | 990.361 | 921.158 | 7.0% | 4235.125 → 4553.295 | 472.929 | 1.95x |
+
+All 1024 measured returned texts, usage objects and finish reasons match BG v20. Every profile has 512 successes, exact forced output lengths, one prefill wave and zero recomputed admissions. Every rank retains 58 first local-MoE captures per actual measurement window, checked again against the later sealed log-prefix bytes; all complete decode samples use local graph replay. Native token-ID equality and BG/SGLang semantic equality are not established.
+
+### Demonstrated implementation cost and fix
+
+The previous MLA decode path repeated Torch operations for length/position assertions, page coverage and physical-page bounds, used-page masks, safe unused-tail zeroing, odd-width padding and write-position conversion in all 61 layers at every step. These operations added allocations and many host submissions even with asynchronous validation already enabled. One checked Triton metadata kernel now performs those operations together. It preserves exact sequence bounds, validates each call and ignores unused negative tail sentinels while zeroing the safe output. It does not cache mutable metadata or round sequence lengths. FlashInfer attention, original projection weights/scales and collective algorithms are unchanged.
+
+This is an intermediate version: the page-table width/row-stride/physical-capacity geometry still specializes compilation. Only node 0 has an active DP request in the single-request warmup. Read-only compile-cache timestamps show new `_prepare` entries on node 1 during the formal long run. This exposes repeated JIT and peer arrival waits; per-profile/node counts and compiled constants are retained in the JSON. A subsequent version must remove geometry specialization before this implementation is treated as the final optimization.
+
+Layer 0 uses verified original checkpoint weights with synthetic activations and metadata. Its outputs and updated KV are bitwise equal in all four tested batch/length cases, including changed dynamic inputs. Ten metadata-layout cases cover batches 1/32, widths 1/2/3/129/160 and noncontiguous tables. Four separate owned GPU children reject invalid position, length, coverage and physical-page metadata through device assertions. Thirty-two changing maximum sequence bounds leave the warmed Triton compile-cache keys unchanged. This check covers changing sequence bounds at fixed geometry, not arbitrary table geometries. The old GPU profiler event capture was incomplete and is not used to claim a kernel-count ratio.
+
+| Real-layer paired host median (ms/call) | Previous | Fused |
+|---|---:|---:|
+| B1, L2048 | 0.758 | 0.473 |
+| B32, L2048 | 0.781 | 0.486 |
+| B32, L8192 | 0.794 | 0.472 |
+| B32, L10240 | 0.863 | 0.540 |
+
+These are paired real-layer microbenchmarks, not extrapolated full-model speedups. Full-run measurements below include first captures, setup and stalls.
+
+| Native complete-run observation | Short v20 → v21 | Long v20 → v21 |
+|---|---:|---:|
+| Weighted decode step (ms) | 118.523 → 96.275 | 111.754 → 103.245 |
+| Forward host launch (ms/step) | 90.639 → 62.968 | 84.230 → 67.131 |
+| Rank 0 decode window (s) | 244.604 → 198.710 | 918.482 → 848.790 |
+| Rank 0 other window (s) | 186.776 → 192.569 | 71.879 → 72.368 |
+| Max 16-rank prefill KV-ready (s) | 158.859 → 158.589 | 42.099 → 42.501 |
+| Rank 0 two switch busy timers (s) | 35.107 → 40.752 | 30.259 → 30.624 |
+
+The prior v19→v20 long decode step increased from 107.319 to 111.754ms. That historical pair has no per-frame thread/runqueue observations; its approximately 4.1% step regression cannot be uniquely attributed to OS scheduling, network congestion or a kernel from sparse historical samples. The current fix demonstrates a removable implementation cost and reports its measured effect without assigning an unsupported historical cause. Native window rows retain all 2047/8191 steps and each rolling maximum. Window means and maxima do not reconstruct per-step tail frequency.
+
+### Communication arrival waits, scheduling and CPU work
+
+A separate two-node 16-rank PyNccl reference used the same worker NCCL setup, eight RoCE rails, GID 3, NVLS/RAS disabled and unchanged algorithms. It uses BF16 local B32×7168, 458752-byte gather input and 7340032-byte global/reduce buffers. Each case has 16 warmups and 128 observations. Across-rank medians:
+
+| Operation | Balanced stream interval (ms) | Rank 0 requested 1ms enqueue delay (ms) |
+|---|---:|---:|
+| All-gather | 0.102 | 1.092 |
+| All-reduce | 0.150 | 1.098 |
+
+The controlled late arrival expands collective event intervals without changing the transport configuration. In-model collective intervals therefore include arrival skew and CPU submission gaps. They are not pure wire time; the standalone balanced reference must not be subtracted from model intervals as an exact wait decomposition. The first isolated probe lacked the complete worker environment, failed initialization and is excluded; both owned failed process families were closed before the valid reference ran.
+
+Every 16th model forward records local thread CPU time, wall time and `/proc/thread-self/schedstat` runqueue delay, plus GPU event intervals harvested through query without an added device wait. The table pools all 16 ranks after excluding frames with component probes. Samples per rank and aligned logical-call observations remain in the JSON. Forward wall excludes sampling/readback after the model. Off-CPU includes driver blocking; thread CPU includes Python and driver submission.
+
+| Non-component-probed forward observation, median / p95 (ms) | Short | Long |
+|---|---:|---:|
+| Host call | 50.767 / 84.336 | 52.007 / 132.969 |
+| Thread CPU | 50.270 / 83.257 | 51.448 / 112.365 |
+| Off-CPU | 0.522 / 1.059 | 0.552 / 1.552 |
+| OS runqueue wait | 0.000 / 0.023 | 0.000 / 0.031 |
+| Inclusive GPU stream | 84.412 / 91.463 | 85.951 / 185.713 |
+
+These direct OS observations distinguish waiting to be scheduled from active host work in sampled frames. They do not prove that every unsampled stall has the same cause. The per-rank and matched-call data should be used alongside complete rolling-window means, rather than adding overlapping CPU, stream, collective and nested graph intervals.
+
+| Matched rank 0 component median (ms/step) | Short v20 → v21 | Long v20 → v21 |
+|---|---:|---:|
+| Attention, stream | 34.035 → 27.193 | 32.089 → 25.842 |
+| Attention, CPU | 51.185 → 31.727 | 51.367 → 33.130 |
+| Local MoE graph, stream | 26.312 → 26.404 | 26.253 → 26.122 |
+| Shared expert, CPU | 5.888 → 5.646 | 6.226 → 6.361 |
+| All-gather + all-reduce, including waits | 69.905 → 57.442 | 39.099 → 63.719 |
+
+Only the intersection of identical logical probe calls is used for v20/v21 component comparison; v21 has additional probes. Sparse component medians are separate from complete-run weighted steps. Inner MoE GEMMs remain inside graph replay and are not individually observed. Host RDMA counters are nonexclusive and do not establish fabric congestion.
+
+### Remaining SGLang gap
+
+SGLang was **not rerun** in this iteration. The table uses the sealed actual v6 first-512 control on the same 16 GPU UUIDs. SGLang uses TP16/DP-attention16/EP1, resident weights, framework graphs, TRT-LLM MLA/MoE paths and effective prefill chunks of 2048 tokens/rank. BG retains TP1/EP16, streamed pure-DP prefill, FA4/FlashInfer MLA, portable general-FP32-scale FP8 GEMMs, the 131072-token prefill microbatch ceiling and framework graphs disabled. Those configuration, layout and backend differences remain unisolated; the frozen wall comparison cannot assign them causal percentages.
+
+The optimized long BG decode window alone is 848.790s versus SGLang's entire frozen 472.929s wall. The long-profile full-run step changed by 7.6% versus v20. Short/long first-capture and stall maxima remain explicit in the native window evidence; they are included in the complete-run means.
+
+
+The remaining optimization priorities are the per-layer host/attention submission path, shared-expert and graph guards, and streamed-prefill expert batching/grouped projections. Collectives should be evaluated with rank arrival alignment before changing network settings. A broader stable-shape graph requires preserving metadata validity and dynamic output ownership. Model-switch costs remain measured separately and cannot account for the entire long decode gap.
+
+Validation: 12 local tracing/analysis tests and 5 remote CPU FakeTensor empty-GEMM tests passed; real-weight GPU checks are recorded above. All formal CPU clients closed, both services remain healthy and idle, and no inference retry occurred. Full-model quality remains unqualified.
+
+[Machine-readable evidence](SM103_DECODE_FOLLOWUP_RESULTS_20261025.json), [real-layer qualification](qualify_r1_decode_metadata.py), [collective reference](benchmark_r1_collective_floor.py), [frame analyzer](analyze_r1_decode_frames.py), [native-window analyzer](analyze_r1_decode_windows.py). JSON SHA256: `1e9947f4a5cc6bcb0040aff84e913667ba9062dd5c9c3f7d7d14411d52b2fbaf`.
+
+## Previous prefill and phase-switch investigation — 2026-10-25
+
+At the previous checkpoint, both nodes served `r1-fast-diagnostic-v20` at runtime `b7c30320363e2f9c6b18a5c6f009d9118b74ab14`. Both original fixed 512 profiles completed, their CPU clients closed independently, and final observations show both services healthy and idle. All 436 common Python sources are checked; the five existing node0-only helpers remain explicit.
 
 **Historical strict attention numerical and NaN-tail failures remain unresolved. Returned-field consistency and operator parity do not qualify full-model numerical or semantic quality.**
 
