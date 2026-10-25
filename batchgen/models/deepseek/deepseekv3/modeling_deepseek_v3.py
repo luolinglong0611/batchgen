@@ -19,7 +19,7 @@
 # limitations under the License.
 """ PyTorch DeepSeek model."""
 import math
-from batchgen.profiling.r1_components import scalar_item as _r1_scalar_item
+from batchgen.profiling.r1_components import scalar_item as _r1_scalar_item, span as _r1_component_span
 import warnings
 from typing import List, Optional, Tuple, Union
 
@@ -1802,9 +1802,26 @@ class DeepseekV3MoE_Decoding_FP8(nn.Module):
 		self.routed_expert_end_idx   = (self.rank + 1) * self.experts_per_rank
 
 		# --- experts, gate, shared MLP --------------------------------------
+		flags = {}
+		for name in ('GPU_MOE_COUNTS', 'LOCAL_MOE_GRAPH', 'LOCAL_EXPERT_SKELETON'):
+			value = os.getenv('BATCHGEN_R1_SM103_' + name, '0')
+			if value not in ('0', '1'):
+				raise ValueError('BATCHGEN_R1_SM103_' + name + ' must be 0 or 1')
+			flags[name] = value == '1'
+		self._r1_gpu_moe_counts = flags['GPU_MOE_COUNTS']
+		self._r1_local_moe_graph = flags['LOCAL_MOE_GRAPH']
+		self._r1_local_expert_skeleton = flags['LOCAL_EXPERT_SKELETON']
+		if self._r1_local_moe_graph and not self._r1_gpu_moe_counts:
+			raise ValueError('R1 local MoE graph requires GPU_MOE_COUNTS=1')
+		if any(flags.values()) and torch.cuda.get_device_capability(self.rank % torch.cuda.device_count()) != (10, 3):
+			raise RuntimeError('R1 GPU metadata/graph/skeleton experiment requires SM103')
+		if self._r1_local_expert_skeleton and (not getattr(config, 'batchgen_skeleton', False) or self.world_size <= 8):
+			raise RuntimeError('R1 local expert skeleton requires serving skeleton and resident multi-node EP')
 		self.experts = nn.ModuleList([
 			DeepseekV3MLP(config, intermediate_size=config.moe_intermediate_size)
-			for _ in range(self.total_experts)
+			if not self._r1_local_expert_skeleton or self.routed_expert_start_idx <= e < self.routed_expert_end_idx
+			else nn.Identity()
+			for e in range(self.total_experts)
 		])
 		self.gate = MoEGate(config)
 		if config.n_shared_experts:
@@ -3049,6 +3066,63 @@ class DeepseekV3MoE_Decoding_FP8(nn.Module):
 	
 	@torch.inference_mode()
 	def moe_infer_allgather_allreduce_bf16_acc(self, x):
+		if not self._r1_gpu_moe_counts:
+			return self._legacy_moe_infer_allgather_allreduce_bf16_acc(x)
+		num_tokens, hidden_size = x.shape
+		if num_tokens > self.num_tokens_per_rank:
+			raise RuntimeError(f'MoE buffer overflow: {num_tokens} > {self.num_tokens_per_rank}')
+		padded = x
+		if num_tokens < self.num_tokens_per_rank:
+			padded = torch.zeros((self.num_tokens_per_rank, hidden_size), device=x.device, dtype=x.dtype)
+			padded[:num_tokens] = x
+		all_tokens = torch.empty((self.world_size * self.num_tokens_per_rank, hidden_size), device=x.device, dtype=x.dtype)
+		stream = torch.cuda.current_stream(x.device)
+		with self.comm.change_state(enable=True):
+			self.comm.all_gather(all_tokens, padded, stream=stream)
+		if self._r1_local_moe_graph:
+			from batchgen.moe.r1_local_graph import forward
+			with _r1_component_span('local_moe_graph'):
+				global_results = forward(self, all_tokens)
+		else:
+			global_results = self._r1_local_moe_compute(all_tokens)
+		with self.comm.change_state(enable=True):
+			self.comm.all_reduce(global_results, op=dist.ReduceOp.SUM, stream=stream)
+		start = self.rank * self.num_tokens_per_rank
+		return global_results[start:start + num_tokens].to(x.dtype)
+
+	def _r1_local_moe_compute(self, global_x):
+		from batchgen.moe.r1_local_graph import inverse_mapping
+		topk_idx, topk_weight = self.gate.moe_gate_forward_hybrid(global_x.unsqueeze(1))
+		assert topk_weight.dtype == torch.float32
+		input_x, _, global_indices, positions, counts, offsets = fused_moe_token_dispatch(
+			global_x, topk_idx.to(torch.int32), self.token_idx, self.topk_pos,
+			self.routed_expert_start_idx, self.routed_expert_end_idx,
+		)
+		valid = offsets[-1]
+		sizes, ids, starts, active = compact_expert_data(counts.to(torch.int32))
+		quant, scales = act_quant(input_x, num_valid_tokens=valid)
+		intermediate = fused_fp8_moe_stage_1_tma(
+			quant, scales, self.gate_list, self.gate_ptrs_ptr, self.up_list, self.up_ptrs_ptr,
+			self.gate_scale_list, self.gate_scale_ptrs_ptr, self.up_scale_list, self.up_scale_ptrs_ptr,
+			sizes, ids, starts, active, self.experts_per_rank,
+			**({'gate_gemm_block_size': _R1_GATE_UP_TILE} if _R1_GATE_UP_TILE is not None else {}),
+		)
+		quant, scales = act_quant(intermediate, num_valid_tokens=valid)
+		res = fused_dequant_grouped_gemm_fp8_tma(
+			quant, scales, self.down_list, self.down_ptrs_ptr, self.down_scale_list, self.down_scale_ptrs_ptr,
+			sizes, ids, starts, active,
+			**({'gemm_block_size': _R1_DOWN_TILE} if _R1_DOWN_TILE is not None else {}),
+		)
+		mapping = inverse_mapping(global_indices, positions, valid, global_x.shape[0], self.num_experts_per_tok)
+		output = torch.empty(global_x.shape, device=global_x.device, dtype=torch.float32)
+		scatter_weight_reduce_optimized_kernel[(global_x.shape[0], triton.cdiv(global_x.shape[1], 256))](
+			res, mapping, topk_weight, output, global_x.shape[0], self.num_experts_per_tok,
+			global_x.shape[1], res.shape[0], BLOCK_SIZE_H=256,
+		)
+		return output.to(torch.bfloat16)
+
+	@torch.inference_mode()
+	def _legacy_moe_infer_allgather_allreduce_bf16_acc(self, x):
 		num_tokens, hidden_size = x.shape
 		device = x.device
 		

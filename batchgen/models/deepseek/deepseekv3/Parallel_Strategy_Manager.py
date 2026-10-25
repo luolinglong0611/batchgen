@@ -1160,6 +1160,9 @@ class DeepseekV3ParallelStrategyManager:
 					self.loaded_model_config.phase == "decode"
 					and not self.global_rank * experts_per_rank <= expert_idx < (self.global_rank + 1) * experts_per_rank
 				)
+				# No wrapper, GPU scale copies or Python MLP is needed for another rank.
+				if nonlocal_expert and getattr(layer.mlp, '_r1_local_expert_skeleton', False):
+					continue
 				# Routed expert: persistent if NOT in weight_copy_task
 				if (
 					"routed_expert_" + str(layer_idx) + "_" + str(expert_idx)
