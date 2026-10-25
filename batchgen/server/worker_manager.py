@@ -280,6 +280,8 @@ class WorkerManager:
         process's life, well past the point where the last worker has loaded
         it. MFD_CLOEXEC keeps an exec'd child from holding it open instead.
         """
+        from batchgen.models.deepseek.deepseekv3.phase_weights import prepare_worker_skeleton
+        skeleton_state_dict = prepare_worker_skeleton(skeleton_state_dict, self.args.model)
         self._close_skeleton_memfd()
         fd = create_memfd("batchgen_skeleton")
         try:

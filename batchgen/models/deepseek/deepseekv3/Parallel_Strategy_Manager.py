@@ -317,6 +317,9 @@ class DeepseekV3ParallelStrategyManager:
 		- persistent=True: weights pre-loaded on GPU
 		- persistent=False: weights loaded from buffer each forward
 		"""
+		if os.environ.get("BATCHGEN_R1_PHASE_PREPARE") == "1":
+			import json
+			logging.info("[R1_WEIGHT_STREAM] rank=%s %s", self.rank, json.dumps(self.core_engine.get_weight_stream_profile(), sort_keys=True))
 		self.loaded_model_config.phase = "decode"
 		self.loaded_model_config._attn_implementation = "eager"
 		self.model = None
@@ -890,9 +893,7 @@ class DeepseekV3ParallelStrategyManager:
 				if name.startswith(prefix) and name.endswith(postfix):
 					# Use simplified key: e.g: "q_a_proj.weight_scale_inv"
 					key = name[len(prefix) :]
-					weight_dequant_scales[key] = param.to(
-						self.engine_config.Basic_Config.device_torch
-					)
+					weight_dequant_scales[key] = self._scale_on_device(name)
 			attn_wrapper_instance = Attn_Wrapper(
 				attn_module,
 				layer_idx,
@@ -1130,9 +1131,7 @@ class DeepseekV3ParallelStrategyManager:
 			for name in mlp_names:
 				key = prefix + name + postfix
 				if key in self.skeleton_state_dict:
-					weight_dequant_scales[name + postfix] = self.skeleton_state_dict[key].to(
-						self.engine_config.Basic_Config.device_torch
-					)
+					weight_dequant_scales[name + postfix] = self._scale_on_device(key)
 
 
 
@@ -1190,9 +1189,7 @@ class DeepseekV3ParallelStrategyManager:
 				for name in mlp_names:
 					key = prefix + name + postfix
 					if key in self.skeleton_state_dict:
-						weight_dequant_scales[name + postfix] = self.skeleton_state_dict[key].to(
-							self.engine_config.Basic_Config.device_torch
-						)
+						weight_dequant_scales[name + postfix] = self._scale_on_device(key)
 				layer.mlp.experts[expert_idx] = DeepSeekExpertWrapper(
 					layer.mlp.experts[expert_idx],
 					layer_idx,
@@ -1227,7 +1224,14 @@ class DeepseekV3ParallelStrategyManager:
 			self._lm_head_forward_pre_hook
 		)	
 
+	def _scale_on_device(self, key):
+		if self._phase_scales is not None:
+			return self._phase_scales[key]
+		return self.skeleton_state_dict[key].to(self.engine_config.Basic_Config.device_torch)
+
 	def _extract_dequantize_scale(self):
+		from .phase_weights import pack_phase_scales
+		self._phase_scales = pack_phase_scales(self.skeleton_state_dict, self.loaded_model_config.phase, self.global_rank, self.world_size, self.engine_config.Basic_Config.device_torch)
 		self.dequant_scale = {}
 		for key, param in self.skeleton_state_dict.items():
 			if "weight_scale_inv" in key:

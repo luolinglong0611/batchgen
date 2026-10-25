@@ -9674,7 +9674,9 @@ class BatchGenWorker:
 		if not sp8_reentry or reseed_reentry:
 			self.core_engine.clear_weight_copy_queue()
 			self.core_engine.reset_prefill_buffer()
-		self.core_engine.reset_weight_stream_profile(k3_prefill_profile)
+		self.core_engine.reset_weight_stream_profile(
+			k3_prefill_profile or os.environ.get("BATCHGEN_R1_PHASE_PREPARE") == "1"
+		)
 		if streamed_sp8 or k3_prefill_profile:
 			from batchgen.models.moonshotai.kimi_linear.k3.mxfp4_expert import (
 				KimiK3MXFP4ExpertWrapper,

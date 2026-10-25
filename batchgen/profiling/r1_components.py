@@ -116,7 +116,7 @@ def install(model, phase, rank):
             calls += 1
             # Few complete steps, after first-call compilation. Same call set
             # on every layer/rank; full512 profiles retain their native length.
-            selected = calls in (8, 16, 32, 64, 256) or calls % 1024 == 0
+            selected = (phase == 'prefill' and os.getenv('BATCHGEN_R1_PHASE_PREPARE') == '1') or calls in (8, 16, 32, 64, 256) or calls % 1024 == 0
             if not selected:
                 return original(*args, **kwargs)
             _TRACE.harvest()
