@@ -106,6 +106,10 @@ def install(model, phase, rank):
         ):
             setattr(source, name, _wrap_stage(getattr(source, name), label))
 
+    if phase == 'decode':
+        from batchgen.profiling.r1_decode_frames import install as install_frames
+        install_frames(model, rank, torch)
+
     def wrap_forward(module, label, layer):
         original = module.forward
         calls = 0
@@ -116,7 +120,7 @@ def install(model, phase, rank):
             calls += 1
             # Few complete steps, after first-call compilation. Same call set
             # on every layer/rank; full512 profiles retain their native length.
-            selected = (phase == 'prefill' and os.getenv('BATCHGEN_R1_PHASE_PREPARE') == '1') or calls in (8, 16, 32, 64, 256) or calls % 1024 == 0
+            selected = (phase == 'prefill' and os.getenv('BATCHGEN_R1_PHASE_PREPARE') == '1') or calls in (8, 16, 32, 64, 256) or calls % 1024 == 0 or (phase == 'decode' and os.getenv('BATCHGEN_R1_SM103_DECODE_DIAGNOSTICS') == '1' and calls % 256 == 128)
             if not selected:
                 return original(*args, **kwargs)
             _TRACE.harvest()

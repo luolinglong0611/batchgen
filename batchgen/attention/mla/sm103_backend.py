@@ -317,13 +317,17 @@ def _validate_decode_lengths(lengths, positions, max_seqlen, *, async_validation
             raise ValueError("max_seqlen is smaller than a sequence length")
 
 
-def _validated_block_table(cache, table, lengths, batch, device, *, async_validation=False):
+def _check_block_table_layout(cache, table, batch, device):
     if cache.ndim != 4 or cache.shape[1:] != (64, 1, 576):
         raise ValueError("Expected MLA cache[physical_pages,64,1,576]")
     if cache.dtype != torch.bfloat16 or cache.device != device or not cache.is_contiguous():
         raise ValueError("MLA cache must be contiguous BF16 on the activation device")
     if table.ndim != 2 or table.shape[0] != batch or table.dtype != torch.int32 or table.device != device:
         raise ValueError("Page table must be int32[B,max_pages] on the activation device")
+
+
+def _validated_block_table(cache, table, lengths, batch, device, *, async_validation=False):
+    _check_block_table_layout(cache, table, batch, device)
     pages_per_sequence = (lengths + 63) // 64
     used = torch.arange(table.shape[1], device=device)[None, :] < pages_per_sequence[:, None]
     if async_validation:
@@ -488,8 +492,12 @@ def mla_decoding_sm103_bf16_with_pagekv(
     if cache_seqlens.shape != (batch,) or cache_seqlens.dtype != torch.int32 or cache_seqlens.device != device:
         raise ValueError("Expected int32 cache_seqlens[B] on the activation device")
     async_validation = _decode_optimization_enabled("BATCHGEN_R1_SM103_ASYNC_VALIDATION")
-    _validate_decode_lengths(cache_seqlens, q_position_ids, max_seqlen,
-                              async_validation=async_validation)
+    fused_metadata = _decode_optimization_enabled("BATCHGEN_R1_SM103_FUSED_METADATA")
+    if fused_metadata and not async_validation:
+        raise ValueError("Fused R1 metadata requires async validation")
+    if not fused_metadata:
+        _validate_decode_lengths(cache_seqlens, q_position_ids, max_seqlen,
+                                 async_validation=async_validation)
 
     cache, _, table = gpu_paged_kv_manager.get_layer_kv_with_page_table(layer_idx=layer_idx)
     if batch_slice is not None:
@@ -497,8 +505,14 @@ def mla_decoding_sm103_bf16_with_pagekv(
         if start < 0 or end - start != batch or end > table.shape[0]:
             raise ValueError("Invalid decode microbatch slice")
         table = table[start:end]
-    table = _validated_block_table(cache, table, cache_seqlens, batch, device,
-                                   async_validation=async_validation)
+    write_positions = None
+    if fused_metadata:
+        _check_block_table_layout(cache, table, batch, device)
+        from .r1_decode_metadata import prepare
+        table, write_positions = prepare(cache, table, cache_seqlens, q_position_ids, max_seqlen)
+    else:
+        table = _validated_block_table(cache, table, cache_seqlens, batch, device,
+                                       async_validation=async_validation)
     projection_graphs = _decode_optimization_enabled("BATCHGEN_R1_SM103_PROJECTION_GRAPHS")
     entry = None
     if projection_graphs:
@@ -524,7 +538,8 @@ def mla_decoding_sm103_bf16_with_pagekv(
         query,k_tensor = _decode_query_kv(self,hidden_states,q_position_ids,weight_scale,cos,sin,absorb)
     gpu_paged_kv_manager.update_layer_decode_new_token(
         k_tensor=k_tensor, v_tensor=None,
-        sequence_lengths=q_position_ids[:, 0].to(torch.int32).contiguous(),
+        sequence_lengths=(write_positions if write_positions is not None
+                          else q_position_ids[:, 0].to(torch.int32).contiguous()),
         layer_idx=layer_idx, batch_slice=batch_slice,
     )
     attn_out = _attend_decode(self, query, cache, table, cache_seqlens.contiguous(), max_seqlen)
