@@ -44,10 +44,16 @@ class _DecodePositionState:
         self.signature = None
         self.stream_key = None
         self.maximum = None
+        self.slice_states = {}
+        self.is_slice = False
 
     def clear(self):
         # The yielded state may survive in user code or an exception traceback.
         # It must not retain a tensor or a reusable scalar after this forward.
+        for child in (self.slice_states or {}).values():
+            child.clear()
+        self.slice_states = None
+        self.is_slice = None
         self.tensor = None
         self.signature = None
         self.stream_key = None
@@ -105,3 +111,43 @@ def decode_position_max(q_position_ids):
     if state.maximum is None:
         raise ValueError("Empty MLA positions have no maximum; return from attention before validation")
     return state.maximum
+
+
+@contextmanager
+def decode_position_slice_scope(full_positions, start, end):
+    """Bind an explicitly owned row slice, retaining its maximum for this forward.
+
+    Only this API can register a slice of the outer scope's exact tensor. A
+    chunk's true maximum is read once and reused across layers; the unsplit
+    scope and its identity/mutation checks remain unchanged. No slice or scalar
+    survives the outer forward. Without an outer scope, calls stay unscoped.
+    """
+    parent = _DECODE_POSITION_STATE.get()
+    if parent is None:
+        yield full_positions[start:end]
+        return
+    if parent.is_slice:
+        raise RuntimeError("Nested MLA position slice scopes are unsupported")
+    parent.validate(full_positions)
+    key = (start, end)
+    child = parent.slice_states.get(key)
+    if child is None:
+        child = _DecodePositionState()
+        child.is_slice = True
+        # Normal views preserve the parent's version counter even when the
+        # model call itself executes under inference_mode.
+        try:
+            with _torch().inference_mode(False):
+                child.bind(full_positions[start:end])
+        except BaseException:
+            child.clear()
+            raise
+        parent.slice_states[key] = child
+    else:
+        child.validate(child.tensor)
+    token = _DECODE_POSITION_STATE.set(child)
+    try:
+        yield child.tensor
+    finally:
+        _DECODE_POSITION_STATE.reset(token)
+        parent.validate(full_positions)

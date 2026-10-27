@@ -62,7 +62,7 @@ def _metadata_payload(lengths, num_heads):
 
 
 class _DecodeForwardState:
-    def __init__(self, manager):
+    def __init__(self, manager, *, batch_slice=None):
         if not callable(getattr(manager, "get_page_table_version", None)):
             raise RuntimeError("Scoped FA2 requires a versioned GPU page-table manager")
         if not hasattr(getattr(manager, "_gpu_page_table_manager", None), "gpu_table"):
@@ -79,10 +79,33 @@ class _DecodeForwardState:
         self.attention_signature = None
         self.prepared = None
         self.planned = False
+        self.batch_slice = batch_slice
+        self.slice_states = {}
+        self.full_length_tensor = None
+        self.full_length_signature = None
+        self.source_table = None
+        self.source_table_signature = None
+        self.expected_table_view = None
+        if batch_slice is not None:
+            self.source_table = manager._gpu_page_table_manager.gpu_table
+            self.source_table_signature = (
+                _metadata_geometry(self.source_table),
+                _tensor_version(self.source_table, "block_table", allow_inference=True),
+            )
+            start, end = batch_slice
+            self.expected_table_view = self.source_table[start:end]
 
     def clear(self):
         # A caller or exception traceback may retain the yielded state after
         # exit. Release its workspace and tensor/manager references regardless.
+        for child, _ in self.slice_states.values():
+            child.clear()
+        self.slice_states.clear()
+        self.full_length_tensor = None
+        self.full_length_signature = None
+        self.source_table = None
+        self.source_table_signature = None
+        self.expected_table_view = None
         self.prepared = None
         self.length_tensor = None
         self.table = None
@@ -99,6 +122,12 @@ class _DecodeForwardState:
     def check_manager(self):
         if self.manager.get_page_table_version() != self.manager_version:
             raise ValueError("GPU page-table generation changed inside one FA2 decode forward")
+        if self.source_table is not None:
+            table = self.manager._gpu_page_table_manager.gpu_table
+            signature = (_metadata_geometry(table),
+                         _tensor_version(table, "block_table", allow_inference=True))
+            if table is not self.source_table or signature != self.source_table_signature:
+                raise ValueError("Source GPU page table changed inside an FA2 row-slice scope")
 
     def check_stream(self, device):
         torch = _torch()
@@ -138,8 +167,18 @@ class _DecodeForwardState:
                 or block_table.dtype not in (torch.int32, torch.int64)
                 or block_table.device != q.device):
             raise ValueError("Scoped FA2 block_table must be an integer matrix on the query CUDA device")
-        if block_table is not self.manager._gpu_page_table_manager.gpu_table:
-            raise ValueError("FA2 block_table does not belong to the scoped GPU manager")
+        if self.batch_slice is None:
+            if block_table is not self.manager._gpu_page_table_manager.gpu_table:
+                raise ValueError("FA2 block_table does not belong to the scoped GPU manager")
+        else:
+            # The native backend creates a fresh view at each layer. Accept
+            # only the exact declared row range of this manager's active table;
+            # equal-valued clones, other rows and reordered tables must fail.
+            expected = self.expected_table_view
+            if (_metadata_geometry(block_table) != _metadata_geometry(expected)
+                    or block_table.untyped_storage().data_ptr()
+                    != expected.untyped_storage().data_ptr()):
+                raise ValueError("FA2 block_table is not the declared manager row slice")
         signature = (_metadata_geometry(block_table),
                      _tensor_version(block_table, "block_table", allow_inference=True))
         attention_signature = (_tensor_geometry(q), _tensor_geometry(k_cache), scale, causal)
@@ -147,9 +186,45 @@ class _DecodeForwardState:
             self.table = block_table
             self.table_signature = signature
             self.attention_signature = attention_signature
-        elif (block_table is not self.table or signature != self.table_signature
+        elif ((self.batch_slice is None and block_table is not self.table)
+              or signature != self.table_signature
               or attention_signature != self.attention_signature):
             raise ValueError("Attention layout, page table, scale or causal mode changed inside one FA2 decode forward")
+
+    def row_slice(self, full_lengths, start, end):
+        if self.batch_slice is not None:
+            raise RuntimeError("Nested FA2 row-slice scopes are unsupported")
+        torch = _torch()
+        if (not isinstance(full_lengths, torch.Tensor) or full_lengths.ndim != 1
+                or full_lengths.dtype not in (torch.int32, torch.int64)):
+            raise ValueError("Full cache lengths must be a rank-1 integer tensor")
+        self.check_manager()
+        self.check_stream(full_lengths.device)
+        signature = (_metadata_geometry(full_lengths),
+                     _tensor_version(full_lengths, "cache_seqlens"))
+        if self.full_length_tensor is None:
+            self.full_length_tensor = full_lengths
+            self.full_length_signature = signature
+        elif (full_lengths is not self.full_length_tensor
+              or signature != self.full_length_signature):
+            raise ValueError("Full cache lengths changed inside an FA2 microbatch forward")
+        table = self.manager._gpu_page_table_manager.gpu_table
+        if self.source_table is None:
+            self.source_table = table
+            self.source_table_signature = (
+                _metadata_geometry(table),
+                _tensor_version(table, "block_table", allow_inference=True),
+            )
+        if table.shape[0] != full_lengths.shape[0]:
+            raise ValueError("Full cache lengths and manager page-table row counts differ")
+        key = (start, end)
+        if key not in self.slice_states:
+            with torch.inference_mode(False):
+                lengths = full_lengths[start:end]
+            self.slice_states[key] = (
+                _DecodeForwardState(self.manager, batch_slice=key), lengths,
+            )
+        return self.slice_states[key]
 
 
 @contextmanager
@@ -172,6 +247,24 @@ def decode_forward_scope(manager):
     finally:
         _DECODE_FORWARD_STATE.reset(token)
         state.clear()
+
+
+@contextmanager
+def decode_forward_batch_slice_scope(manager, full_lengths, start, end):
+    """Retain one FA2 plan per declared row range until the outer forward exits."""
+    parent = _DECODE_FORWARD_STATE.get()
+    if parent is None:
+        yield full_lengths[start:end]
+        return
+    if manager is not parent.manager:
+        raise ValueError("Microbatch manager differs from the active FA2 forward")
+    child, lengths = parent.row_slice(full_lengths, start, end)
+    token = _DECODE_FORWARD_STATE.set(child)
+    try:
+        yield lengths
+    finally:
+        _DECODE_FORWARD_STATE.reset(token)
+        parent.row_slice(full_lengths, start, end)
 
 
 def _torch():
