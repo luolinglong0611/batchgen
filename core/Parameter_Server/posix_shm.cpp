@@ -52,6 +52,7 @@
 #include <cuda_runtime_api.h>
 #include "../utils.h"
 #include "posix_shm.h"
+#include "host_registration.h"
 #include "spdlog/spdlog.h"
 #include <signal.h>
 #include <setjmp.h>
@@ -67,6 +68,16 @@
 namespace fs = std::filesystem;
 
 std::shared_ptr<spdlog::logger> logger = init_logger("info", "Server");
+
+namespace {
+batchgen::host_registration::Registry& host_registration_registry() {
+    // The extension's object destructors may run during interpreter shutdown.
+    // Keep the bookkeeping alive until process exit, independently of static
+    // destruction order. Individual mappings are removed on normal release.
+    static auto* registry = new batchgen::host_registration::Registry();
+    return *registry;
+}
+}  // namespace
 
 bool check_hugepage_availability(int64_t required_size) {
     std::ifstream meminfo("/proc/meminfo");
@@ -346,7 +357,9 @@ void* allocate_shared_pinned_memory(const std::string& shm_name,
                                     int memfd_creator_pid,
                                     int memfd_fd_arg,
                                     int* out_memfd_fd,
-                                    int64_t* out_mapped_size) {
+                                    int64_t* out_mapped_size,
+                                    const std::vector<batchgen::host_registration::Range>*
+                                        registration_tensor_extents) {
     if (size <= 0) {
         throw std::runtime_error("Invalid allocation size: " + std::to_string(size));
     }
@@ -354,6 +367,18 @@ void* allocate_shared_pinned_memory(const std::string& shm_name,
         throw std::runtime_error("memfd creator requires an output fd");
     }
     if (out_mapped_size) *out_mapped_size = 0;
+
+    // Opt-in workaround for drivers which cannot register this model-sized
+    // mapping in one call. Parse before allocating/touching host memory. The
+    // parameter-server owner never registers and does not consult this option.
+    const size_t registration_chunk_bytes = pin_for_cuda
+        ? batchgen::host_registration::chunk_bytes_from_env(
+              std::getenv("BATCHGEN_HOST_REGISTER_CHUNK_GIB"))
+        : 0;
+    if (registration_chunk_bytes != 0 &&
+        (registration_tensor_extents == nullptr || registration_tensor_extents->empty())) {
+        throw std::invalid_argument("chunked host registration requires nonempty tensor metadata");
+    }
 
     const size_t page_size = sysconf(_SC_PAGESIZE);
     const size_t huge_page_size = 2 * 1024 * 1024; // 2MB
@@ -536,43 +561,76 @@ void* allocate_shared_pinned_memory(const std::string& shm_name,
         }
     }
 
-    // STAGE 3: Register the successfully allocated memory with CUDA (only if pin_for_cuda is true)
-    // Server process skips this to avoid GPU memory usage from page tables
-    if (pin_for_cuda) {
-        try {
-            logger->info("Registering {:.3f}GB with CUDA...", size / (1024.0 * 1024.0 * 1024.0));
-            auto cuda_start = std::chrono::high_resolution_clock::now();
-
-            cudaError_t err = cudaHostRegister(ptr, size, cudaHostRegisterDefault);
-
-            auto cuda_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::high_resolution_clock::now() - cuda_start);
-
-            if (err != cudaSuccess) {
-                throw std::runtime_error("cudaHostRegister failed: " + std::string(cudaGetErrorString(err)));
-            }
-
-            logger->info("CUDA registration completed in {:.2f}s", cuda_duration.count() / 1000.0);
-        } catch (const std::exception& e) {
-            // Clean up memory and rethrow if CUDA registration fails. Closing
-            // the creator's fd is the whole release in both modes.
-            munmap(ptr, allocated_size);
-            if (create && *out_memfd_fd >= 0) {
-                close(*out_memfd_fd);
-                *out_memfd_fd = -1;
-            }
-            throw;
+    // STAGE 3: Register workers, but track owners too so their destructor never
+    // calls CUDA. Registry publication and all range bookkeeping are allocated
+    // before the first CUDA registration. A failure rolls back successful ranges
+    // in reverse order; default/unset chunk size still makes exactly one call.
+    bool mapping_tracked = false;
+    int rollback_error = 0;
+    const auto unregister_range = [](int, void* address) noexcept {
+        return static_cast<int>(cudaHostUnregister(address));
+    };
+    try {
+        std::vector<batchgen::host_registration::Range> registration_plan;
+        if (registration_chunk_bytes != 0) {
+            registration_plan = batchgen::host_registration::tensor_aware_plan(
+                allocated_size, registration_chunk_bytes, page_size,
+                *registration_tensor_extents);
         }
-    } else {
-        logger->info("Skipping CUDA registration (server mode, no GPU access needed)");
+        int device = -1;
+        if (pin_for_cuda) {
+            const cudaError_t error = cudaGetDevice(&device);
+            if (error != cudaSuccess) {
+                throw std::runtime_error("cudaGetDevice before host registration failed: " +
+                                         std::string(cudaGetErrorString(error)));
+            }
+            logger->info("Registering {:.3f}GB with CUDA (chunk GiB={}, device={})...",
+                         size / (1024.0 * 1024.0 * 1024.0),
+                         registration_chunk_bytes / (1024ULL * 1024ULL * 1024ULL),
+                         device);
+        }
+        const auto cuda_start = std::chrono::steady_clock::now();
+        const size_t ranges = host_registration_registry().add(
+            ptr, allocated_size, registration_chunk_bytes != 0 ? allocated_size : size,
+            registration_chunk_bytes, pin_for_cuda, device,
+            [](void* address, size_t bytes) noexcept {
+                return static_cast<int>(cudaHostRegister(address, bytes,
+                                                         cudaHostRegisterDefault));
+            },
+            unregister_range, rollback_error,
+            registration_chunk_bytes != 0 ? &registration_plan : nullptr);
+        mapping_tracked = true;
+        if (pin_for_cuda) {
+            logger->info("CUDA registration completed: {} ranges in {:.2f}s", ranges,
+                         std::chrono::duration<double>(
+                             std::chrono::steady_clock::now() - cuda_start).count());
+        } else {
+            logger->info("Skipping CUDA registration (server mode, no GPU access needed)");
+        }
+        logger->info("Memory allocation completed successfully using {} pages.",
+                     using_huge_pages ? "huge" : "regular");
+        if (out_mapped_size) *out_mapped_size = allocated_size;
+        return ptr;
+    } catch (...) {
+        if (mapping_tracked) {
+            // Also covers a logging exception after successful registration.
+            const auto released = host_registration_registry().release(
+                ptr, unregister_range,
+                [](void* address, size_t bytes) noexcept { return munmap(address, bytes); });
+            if (rollback_error == 0) rollback_error = released.unregister_error;
+        } else {
+            munmap(ptr, allocated_size);
+        }
+        if (create && *out_memfd_fd >= 0) {
+            close(*out_memfd_fd);
+            *out_memfd_fd = -1;
+        }
+        if (rollback_error != 0) {
+            logger->error("Host registration rollback cudaHostUnregister error={}",
+                          rollback_error);
+        }
+        throw;
     }
-
-    logger->info("Memory allocation completed successfully using {} pages.",
-               using_huge_pages ? "huge" : "regular");
-
-    if (out_mapped_size) *out_mapped_size = allocated_size;
-
-    return ptr;
 }
 
 
@@ -605,16 +663,56 @@ void verify_numa_allocation(void* ptr, size_t size) {
 
 void free_shared_pinned_memory(void* ptr, int64_t size) {
     const auto start = std::chrono::steady_clock::now();
-    const cudaError_t unregister_result = cudaHostUnregister(ptr);
-    const auto unregister_done = std::chrono::steady_clock::now();
-    const int unmap_result = munmap(ptr, size);
+    int original_device = -1;
+    int active_device = -1;
+    bool restore_device = false;
+    auto unregister_done = start;
+    const auto result = host_registration_registry().release(
+        ptr,
+        [&](int device, void* address) noexcept {
+            // Only registered workers enter this callback. Owners can release
+            // their mapping without initializing or querying a CUDA context.
+            if (original_device < 0) {
+                const cudaError_t error = cudaGetDevice(&original_device);
+                if (error != cudaSuccess) return static_cast<int>(error);
+                active_device = original_device;
+            }
+            if (active_device != device) {
+                const cudaError_t error = cudaSetDevice(device);
+                if (error != cudaSuccess) return static_cast<int>(error);
+                active_device = device;
+                restore_device = true;
+            }
+            return static_cast<int>(cudaHostUnregister(address));
+        },
+        [&](void* address, size_t bytes) noexcept {
+            unregister_done = std::chrono::steady_clock::now();
+            return munmap(address, bytes);
+        });
     const auto unmap_done = std::chrono::steady_clock::now();
+    if (restore_device) {
+        const cudaError_t error = cudaSetDevice(original_device);
+        if (error != cudaSuccess) {
+            logger->error("Could not restore CUDA device after host memory release: {}",
+                          static_cast<int>(error));
+        }
+    }
+    if (!result.found) {
+        // Never attempt speculative CUDA cleanup or munmap for an untracked
+        // pointer. As with free(), callers must release each allocation once.
+        logger->warn("Ignoring release of an untracked shared memory pointer");
+        return;
+    }
+    if (size < 0 || static_cast<size_t>(size) != result.mapped_bytes) {
+        logger->warn("Shared mapping release size mismatch: caller={}, tracked={}",
+                     size, result.mapped_bytes);
+    }
     logger->info(
-        "shared memory release: cudaHostUnregister={} elapsed={:.3f}s, "
+        "shared memory release: ranges={} cudaHostUnregister={} elapsed={:.3f}s, "
         "munmap={} elapsed={:.3f}s",
-        static_cast<int>(unregister_result),
+        result.unregistered_ranges, result.unregister_error,
         std::chrono::duration<double>(unregister_done - start).count(),
-        unmap_result,
+        result.unmap_error,
         std::chrono::duration<double>(unmap_done - unregister_done).count());
 }
 

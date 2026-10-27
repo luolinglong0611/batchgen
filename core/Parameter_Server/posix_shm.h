@@ -20,8 +20,15 @@
 
 #pragma once
 #include "Parameter_Server.h"
+#include "host_registration.h"
 #include <string>
 #include <unordered_map>
+// BATCHGEN_HOST_REGISTER_CHUNK_GIB is an opt-in unsigned integer; unset/0
+// retains one CUDA registration. Positive values split worker registrations
+// into ranges no larger than that value, using required tensor metadata to
+// avoid splitting any original tensor. Mapping size/copy order are unchanged. Owners
+// (pin_for_cuda=false) are tracked but never registered with CUDA. Every returned
+// mapping must be released exactly once through free_shared_pinned_memory.
 void* allocate_shared_pinned_memory(const std::string& shm_name, int64_t size,
                                     bool create, bool enable_hugetlbfs,
                                     bool pin_for_cuda = true,
@@ -29,7 +36,9 @@ void* allocate_shared_pinned_memory(const std::string& shm_name, int64_t size,
                                     int memfd_creator_pid = -1,
                                     int memfd_fd = -1,
                                     int* out_memfd_fd = nullptr,
-                                    int64_t* out_mapped_size = nullptr);
+                                    int64_t* out_mapped_size = nullptr,
+                                    const std::vector<batchgen::host_registration::Range>*
+                                        registration_tensor_extents = nullptr);
 void free_shared_pinned_memory(void* ptr, int64_t size);
 // Returns the creator's memfd, which must stay open for attachers to reach it
 // through /proc/<creator_pid>/fd/<N>.

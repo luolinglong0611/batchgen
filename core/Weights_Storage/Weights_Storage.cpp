@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
+#include <cstdlib>
 #include <memory>
 #include <fstream>
 #include <string>
@@ -672,6 +673,28 @@ void Weights_Storage::Init(
     auto weights_map =
         deserialize_from_memfd(memfd_creator_pid, tensor_meta_memfd_fd);
 
+    // Optional registration chunking must not split a tensor: HtoD_Engine and
+    // get_tensor()->Tensor.to both copy whole original tensors. Keep the default
+    // path unchanged; with chunking enabled, validate signed metadata before
+    // converting it to unsigned offsets for the tensor-aware planner.
+    std::vector<batchgen::host_registration::Range> registration_tensors;
+    if (batchgen::host_registration::chunk_bytes_from_env(
+            std::getenv("BATCHGEN_HOST_REGISTER_CHUNK_GIB")) != 0) {
+        for (const auto& module : weights_map) {
+            for (const auto& tensor : module.second) {
+                const auto& meta = tensor.second;
+                try {
+                    registration_tensors.push_back(
+                        batchgen::host_registration::checked_tensor_extent(
+                            meta.offset, meta.byte_size, meta.tensor_shape, meta.dtype, byte_size));
+                } catch (const std::invalid_argument& error) {
+                    throw std::runtime_error("invalid tensor metadata for host registration: " +
+                        module.first + "/" + tensor.first + ": " + error.what());
+                }
+            }
+        }
+    }
+
     this->logger->info(
         "Initializing Weights_Storage with shared memory name: {} and byte size: {}",
         shm_name, byte_size);
@@ -681,7 +704,8 @@ void Weights_Storage::Init(
     void* weight_ptr =
         allocate_shared_pinned_memory(shm_name, byte_size, false, enable_hugetlbfs, true,
                                       enable_thp, memfd_creator_pid, memfd_fd_arg,
-                                      nullptr, &mapped_size);
+                                      nullptr, &mapped_size,
+                                      registration_tensors.empty() ? nullptr : &registration_tensors);
 
     // Check if weight_ptr is null
     if (weight_ptr == nullptr) {
