@@ -43,7 +43,8 @@ namespace batchgen::kv {
 
 namespace worker_detail {
 void RegisterPinnedRange(void* base, std::size_t bytes, int device_index,
-                         const std::shared_ptr<spdlog::logger>& logger);
+                         const std::shared_ptr<spdlog::logger>& logger,
+                         std::size_t layer_stride_bytes = 0);
 void UnregisterPinnedRange(void* base, int device_index,
                            const std::shared_ptr<spdlog::logger>& logger);
 
@@ -1822,7 +1823,8 @@ class HostPagedKVWorkerView : private LayerMapper {
             return;
         }
         worker_detail::RegisterPinnedRange(static_cast<void*>(base), bytes,
-                                           device_index_, logger_);
+                                           device_index_, logger_,
+                                           layout_.LayerStrideBytes());
         pinned_registered_ = true;
         pinned_base_ = static_cast<void*>(base);
         pinned_bytes_ = bytes;

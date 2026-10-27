@@ -12,6 +12,10 @@ from a full-model correctness or throughput result.
   an individual tensor must fit in a range. Registration failure rolls back
   completed ranges, and release uses the original CUDA device. This setting
   does not resize Host KV or change admission/scheduling.
+  The Host KV worker view also honors the opt-in, grouping only complete
+  physical layers so existing page and token transfers never cross separately
+  registered ranges. A 2304--2560 GiB, 61-layer BF16 MLA pool requires a
+  64 GiB limit; 32 GiB cannot contain one physical layer.
 - `BATCHGEN_R1_SM103_FP8_COMPAT=1`: explicitly selects the existing Triton
   W8A8 implementation with original FP8 operands and FP32 scales. It requires
   actual compute capability 10.3 and `DISABLE_MMA_V5=1`. Unset/0 retains
