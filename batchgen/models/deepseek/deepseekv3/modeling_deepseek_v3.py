@@ -899,13 +899,12 @@ class MoEGate(nn.Module):
 		
 		# Custom kernel handles MoE routing
 		topk_idx, topk_weight = moe_fused_gate(
-			scores,
-			self.e_score_correction_bias,
-			self.n_group,
-			self.topk_group,
-			self.n_routed_experts,
-			self.top_k,
-			self.routed_scaling_factor
+			input_tensor=scores,
+			bias=self.e_score_correction_bias,
+			num_expert_group=self.n_group,
+			topk_group=self.topk_group,
+			topk=self.top_k,
+			routed_scaling_factor=self.routed_scaling_factor,
 		)
 		
 		return topk_idx, topk_weight

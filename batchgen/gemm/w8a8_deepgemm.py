@@ -1,5 +1,5 @@
 import torch
-import deep_gemm
+from .r1_sm103_compat import fp8_gemm_nt, load_deep_gemm, sm103_fp8_compat_enabled, w8a8_gemm
 
 
 def _tma_aligned_m(rows: int, element_size: int) -> int:
@@ -47,6 +47,9 @@ def _as_one_group_rhs_scale(scale: torch.Tensor) -> torch.Tensor:
 
 
 def _masked_fp8_grouped_gemm():
+    if sm103_fp8_compat_enabled():
+        raise ValueError("SM103 FP8 compatibility does not implement masked grouped DeepGEMM")
+    deep_gemm = load_deep_gemm()
     for name in (
         "m_grouped_gemm_fp8_fp8_bf16_nt_masked",
         "m_grouped_fp8_gemm_nt_masked",
@@ -77,6 +80,14 @@ def w8a8_deepgemm(
     """
     M, K = a.shape
     N = w.shape[0]
+
+    if sm103_fp8_compat_enabled():
+        if c is not None or num_valid_tokens is not None or expected_m is not None:
+            raise ValueError("SM103 FP8 compatibility supports ordinary GEMM only; no accumulation or masked-M options")
+        if recipe is not None or disable_ue8m0_cast is not True:
+            raise ValueError("SM103 FP8 compatibility preserves FP32 scales; recipes and UE8M0 casting are unsupported")
+        result = w8a8_gemm(a, a_scale, w, w_scale, out=out)
+        return result if out is None else None
 
     # Allocate output
     if out is None:
@@ -123,7 +134,7 @@ def w8a8_deepgemm(
     rhs = (w, w_scale)
 
     # Call with optional parameters
-    deep_gemm.fp8_gemm_nt(
+    fp8_gemm_nt(
         lhs,
         rhs,
         output,

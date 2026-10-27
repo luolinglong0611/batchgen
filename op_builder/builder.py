@@ -32,6 +32,7 @@ import distutils.ccompiler
 import distutils.log
 import distutils.sysconfig
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -49,6 +50,26 @@ WARNING = f"{YELLOW} [WARNING] {END}"
 
 DEFAULT_TORCH_EXTENSION_PATH = "/tmp/torch_extensions"
 DEFAULT_COMPUTE_CAPABILITIES = "6.0;6.1;7.0"
+
+
+def _parse_compute_capability(value):
+    """Parse complete major/minor components and optional nvcc target suffix.
+
+    Architecture-specific ``a`` and family-specific ``f`` suffixes belong to
+    both virtual and real targets. Compiler support for a syntactically valid
+    target is still checked by nvcc, not inferred from its first digit.
+    """
+    if not isinstance(value, str):
+        raise ValueError(f"Invalid CUDA compute capability {value!r}")
+    match = re.fullmatch(r"([1-9][0-9]*)\.(0|[1-9][0-9]*)([af]?)(\+PTX)?", value.strip())
+    if match is None:
+        raise ValueError(
+            f"Invalid CUDA compute capability {value!r}; expected major.minor"
+            " with optional a/f suffix and +PTX"
+        )
+    major, minor, suffix, ptx = match.groups()
+    return int(major), int(minor), suffix, ptx is not None
+
 
 try:
     import torch
@@ -646,7 +667,9 @@ class CUDAOpBuilder(OpBuilder):
                 cc = f"{CC_MAJOR}.{CC_MINOR}"
                 if cc not in ccs:
                     ccs.append(cc)
-            ccs = sorted(ccs)
+            if not ccs:
+                raise RuntimeError("No visible CUDA devices for compute capability detection")
+            ccs = sorted(ccs, key=lambda cc: _parse_compute_capability(cc)[:2])
             ccs[-1] += "+PTX"
         else:
             # Cross-compile mode, compile for various architectures
@@ -659,11 +682,13 @@ class CUDAOpBuilder(OpBuilder):
                     print(
                         f"{WARNING} env var `TORCH_CUDA_ARCH_LIST={cross_compile_archs_env}` overrides `cross_compile_archs={cross_compile_archs}`"
                     )
-                cross_compile_archs = cross_compile_archs_env.replace(" ", ";")
+                cross_compile_archs = cross_compile_archs_env
             else:
                 if cross_compile_archs is None:
                     cross_compile_archs = get_default_compute_capabilities()
-            ccs = cross_compile_archs.split(";")
+            if not isinstance(cross_compile_archs, str):
+                raise ValueError("CUDA architecture list must be a string")
+            ccs = re.split(r"[;\s]+", cross_compile_archs.strip())
 
         ccs = self.filter_ccs(ccs)
         if len(ccs) == 0:
@@ -674,12 +699,13 @@ class CUDAOpBuilder(OpBuilder):
         args = []
         self.enable_bf16 = True
         for cc in ccs:
-            num = cc[0] + cc[2]
+            major, minor, suffix, emit_ptx = _parse_compute_capability(cc)
+            num = f"{major}{minor}{suffix}"
             args.append(f"-gencode=arch=compute_{num},code=sm_{num}")
-            if cc.endswith("+PTX"):
+            if emit_ptx:
                 args.append(f"-gencode=arch=compute_{num},code=compute_{num}")
 
-            if int(cc[0]) <= 7:
+            if major <= 7:
                 self.enable_bf16 = False
 
         return args

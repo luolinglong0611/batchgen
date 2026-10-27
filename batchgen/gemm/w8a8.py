@@ -814,8 +814,8 @@ def w8a8_gemm_kernel_optimized(
     pid_n = (pid % num_pid_in_group) // group_size_m
 
     # Block offsets
-    offs_am = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offs_bn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+    offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)).to(tl.int64)
+    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)).to(tl.int64)
     
     # Masks for boundary conditions
     mask_m = offs_am < M
@@ -828,7 +828,7 @@ def w8a8_gemm_kernel_optimized(
     # CRITICAL: BLOCK_SIZE_K should equal quantization block size (128)
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         k_start = k * BLOCK_SIZE_K
-        offs_k = k_start + tl.arange(0, BLOCK_SIZE_K)
+        offs_k = (k_start + tl.arange(0, BLOCK_SIZE_K)).to(tl.int64)
         mask_k = offs_k < K
         
         # ===== LOAD SCALES (once per K-block) =====
@@ -865,8 +865,8 @@ def w8a8_gemm_kernel_optimized(
     # Convert to BF16 and write back
     c = accumulator.to(tl.bfloat16)
     
-    offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+    offs_cm = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)).to(tl.int64)
+    offs_cn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)).to(tl.int64)
     c_ptrs = c_ptr + offs_cm[:, None] * stride_cm + offs_cn[None, :] * stride_cn
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
     

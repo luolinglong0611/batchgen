@@ -5,10 +5,10 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from flash_attn_interface import flash_attn_varlen_func 
+from flash_attn_interface import flash_attn_varlen_func
 from .padding import _upad_input, pad_input
 from .rotary_embedding import mla_rotary_pos_emb, rotary_pos_emb, apply_rotary_pos_emb
-import deep_gemm
+from batchgen.gemm.r1_sm103_compat import fp8_gemm_nt, sm103_fp8_compat_enabled, w8a16_gemm as sm103_w8a16_gemm
 # from deep_gemm import get_col_major_tma_aligned_tensor
 import logging
 from typing import Tuple
@@ -604,6 +604,8 @@ def w8a16_gemm(
 		weight_data_fp8: [m, n]
 		weight_scale_inv_fp32: [m, n]
 	"""
+	if sm103_fp8_compat_enabled():
+		return sm103_w8a16_gemm(weight_data_fp8, weight_scale_inv_fp32, activation_bf16)
 	assert weight_data_fp8.dim() == 2
 	assert activation_bf16.dim() == 3 or activation_bf16.dim() == 2
 	if activation_bf16.dim() == 3:
@@ -622,7 +624,7 @@ def w8a16_gemm(
 	# (layout.hpp:22 early-exits for arch_major==9 regardless), and omitting
 	# lets DeepGEMM's default handling apply (same as SGLang). This also
 	# ensures Blackwell upgrade path uses UE8M0 natively when appropriate.
-	deep_gemm.fp8_gemm_nt(x_fp8, y_fp8, out)
+	fp8_gemm_nt(x_fp8, y_fp8, out)
 	if activation_bf16.dim() == 3:
 		out = out.view(n_group, l, n)
 	else:
