@@ -45,6 +45,19 @@ hostname; no credentials or live connection bindings are included here.
 
 ## Decode preparation and attention microbatches
 
+`BATCHGEN_DEEPSEEK_SINGLE_NODE_RESIDENT_EP=1` explicitly selects the existing
+paged decode path (`attn_mode=3`) with DP8 attention and all 32 local routed
+experts resident per rank on an eight-GPU deployment. It disables the unused
+decode weight/KV rings while retaining the actual world size and native paged
+KV allocator. EP offloading must remain disabled, including its zero-ratio
+flag. This is a new configuration adaptation, not a new scheduling mechanism
+or a claim that the model and peak workspaces fit a particular GPU. Unset/0
+keeps the previous planner behavior. Set `BATCHGEN_MAX_DECODE_RANK_BSZ` and
+`BATCHGEN_MAX_RANK_BSZ` to the same positive integer when tuning admission and
+communication buffers (default 128); a legacy-only override cannot raise the
+worker's admission cap. Existing SM103 compatibility and Graph OFF requirements
+still apply to that platform profile.
+
 The FA2 forward scope reuses metadata, workspace and planning only within one
 stable eager forward. MLA position validation shares the scalar maximum within
 that forward while preserving each layer's RoPE-bound check. Resident MLA

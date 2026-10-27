@@ -18,6 +18,9 @@
 
 """DeepSeek-V3/R1 specific planner for BatchGen configuration."""
 
+import os
+import re
+
 from batchgen.planner.base_planner import BasePlanner
 
 
@@ -37,18 +40,45 @@ class DeepSeekV3Planner(BasePlanner):
         return "0.1.6"
 
     def _adjust_config_for_model(self):
-        """DeepSeek-specific config adjustments.
+        """Opt in to the existing resident EP decode path on eight GPUs."""
+        name = "BATCHGEN_DEEPSEEK_SINGLE_NODE_RESIDENT_EP"
+        requested = os.environ.get(name, "0")
+        if requested not in ("0", "1"):
+            raise ValueError(f"{name} must be 0 or 1")
+        if requested == "0":
+            return
 
-        Most config is already set by base class _compute_batch_configs().
-        This method handles any DeepSeek-specific overrides if needed.
-        """
-        # Currently no additional adjustments needed beyond base class
-        # The base class handles:
-        # - EP config (num_local_expert_per_layer)
-        # - Attention mode (1 for single-node, 3 for dual-node)
-        # - Decoding buffers
-        # - Prefill batch sizes based on prompt length
-        pass
+        if self.world_size != 8:
+            raise ValueError(f"{name} requires world_size=8")
+        ep = self.config.EP_Config
+        if ep.enable_offloading or ep.offloading_ratio != 0:
+            raise ValueError(f"{name} requires EP offloading disabled and ratio=0")
+
+        # The worker's admission cap defaults to 128. Its legacy spelling
+        # controls the strategy manager's communication buffers separately.
+        cap_name = "BATCHGEN_MAX_DECODE_RANK_BSZ"
+        legacy_name = "BATCHGEN_MAX_RANK_BSZ"
+        cap = os.environ.get(cap_name, "128")
+        legacy_cap = os.environ.get(legacy_name, cap)
+        for key, value in ((cap_name, cap), (legacy_name, legacy_cap)):
+            if not re.fullmatch(r"[1-9][0-9]*", value):
+                raise ValueError(f"{key} must be a positive integer")
+        if cap != legacy_cap:
+            raise ValueError(f"{cap_name} and {legacy_name} must match")
+
+        # Select the same fully resident DP-attention/EP-MoE path already
+        # used by multi-node configurations, retaining the real world size.
+        self.config.Basic_Config.attn_mode = 3
+        ep.enable = True
+        ep.num_local_expert_per_layer = self.NUM_EXPERTS // self.world_size
+        self.config.Module_Batching_Config.MoE_decoding_micro_batch_size = int(cap)
+        buffers = self.config.GPU_Buffer_Config
+        buffers.num_decoding_module_buffer = {
+            "attn": 0, "routed_expert": 0, "shared_expert": 0,
+        }
+        buffers.num_k_buffer = 0
+        buffers.num_v_buffer = 0
+        buffers.kv_buffer_num_tokens = 0
 
     def get_module_shapes(self) -> dict:
         """Return DeepSeek-V3/R1 specific tensor shapes."""
