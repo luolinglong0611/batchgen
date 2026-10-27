@@ -38,6 +38,8 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
+from tokenizers.processors import TemplateProcessing
+
 from batchgen.config.fast_tokenizer import FastTokenizer
 from batchgen.config.tokenizer_registry import register_tokenizer
 
@@ -95,6 +97,8 @@ class DeepSeekV3Tokenizer(FastTokenizer):
             self.eos_token = id_to_token[self.eos_token_id]
             self.pad_token = self.eos_token  # Use EOS as pad
 
+        self._setup_configured_special_tokens()
+
         # Re-enable padding with correct pad token
         if self.pad_token is not None:
             self.tokenizer.enable_padding(
@@ -107,6 +111,69 @@ class DeepSeekV3Tokenizer(FastTokenizer):
             f"DeepSeek-V3 tokenizer initialized: vocab_size={self.vocab_size}, "
             f"bos={self.bos_token_id}, eos={self.eos_token_id}"
         )
+
+    def _setup_configured_special_tokens(self):
+        """Apply the LlamaTokenizerFast BOS/EOS config missing from tokenizer.json.
+
+        R1's released tokenizer.json has no BOS postprocessor; transformers
+        installs one from tokenizer_config.json (add_bos_token=true). Configure
+        only this model's Rust tokenizer, so single and batched encodes agree.
+        """
+        self.add_bos_token = self._config.get("add_bos_token", True)
+        self.add_eos_token = self._config.get("add_eos_token", False)
+        if not isinstance(self.add_bos_token, bool) or not isinstance(self.add_eos_token, bool):
+            raise ValueError("DeepSeek add_bos_token/add_eos_token must be booleans")
+        special_tokens = []
+        for enabled, token, token_id in (
+            (self.add_bos_token, self.bos_token, self.bos_token_id),
+            (self.add_eos_token, self.eos_token, self.eos_token_id),
+        ):
+            if enabled:
+                if not token:
+                    raise ValueError("Configured DeepSeek BOS/EOS token is missing from vocabulary")
+                special_tokens.append((token, token_id))
+
+        def sequence(name, type_id):
+            return (
+                ([f"{self.bos_token}:{type_id}"] if self.add_bos_token else [])
+                + [f"${name}:{type_id}"]
+                + ([f"{self.eos_token}:{type_id}"] if self.add_eos_token else [])
+            )
+
+        self.tokenizer.post_processor = TemplateProcessing(
+            single=sequence("A", 0), pair=sequence("A", 0) + sequence("B", 1),
+            special_tokens=special_tokens,
+        )
+
+    def _text_for_special_tokens(self, text):
+        """Make automatic boundaries idempotent for already rendered chat text.
+
+        The scheduler renders chat with its BOS, then the worker invokes batch
+        encoding with special tokens enabled. Consume one matching outer token
+        before the postprocessor restores it. Interior tokens and intentionally
+        repeated boundary tokens remain intact; add_special_tokens=False bypasses
+        this normalization entirely. Plain text remains HF-compatible, while
+        preformatted chat avoids HF's double-BOS encode(rendered, True) pitfall.
+        """
+        if self.add_bos_token and text.startswith(self.bos_token):
+            text = text[len(self.bos_token):]
+        if self.add_eos_token and text.endswith(self.eos_token):
+            text = text[:-len(self.eos_token)]
+        return text
+
+    def encode(self, text: str, add_special_tokens: bool = True):
+        if add_special_tokens:
+            text = self._text_for_special_tokens(text)
+        return super().encode(text, add_special_tokens=add_special_tokens)
+
+    def __call__(self, texts, *args, **kwargs):
+        # FastTokenizer.__call__ always enables special tokens, including the
+        # worker's padding=False/return_tensors=None admission path.
+        if isinstance(texts, str):
+            texts = self._text_for_special_tokens(texts)
+        else:
+            texts = [self._text_for_special_tokens(text) for text in texts]
+        return super().__call__(texts, *args, **kwargs)
 
     # ---- Output parsing ----
 

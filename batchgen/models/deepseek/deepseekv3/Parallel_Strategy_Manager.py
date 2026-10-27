@@ -257,6 +257,9 @@ class DeepseekV3ParallelStrategyManager:
 				f"expert={timings['expert']:.1f}s, to_device={timings['to_device']:.1f}s)"
 			)
 
+		if os.environ.get("R1_FULL_MODEL_TRACE", "0") == "1":
+			from scripts.r1_reproduction.r1_full_model_trace import register_model_hooks
+			register_model_hooks(self.model, self.rank, self.world_size, "prefill")
 		return self.model, self.weight_copy_task
 	
 	def _warmup(self):
@@ -493,6 +496,9 @@ class DeepseekV3ParallelStrategyManager:
 		# Warmup compiled kernels
 		self._warmup()
 
+		if os.environ.get("R1_FULL_MODEL_TRACE", "0") == "1":
+			from scripts.r1_reproduction.r1_full_model_trace import register_model_hooks
+			register_model_hooks(self.model, self.rank, self.world_size, "decode")
 		return self.model, self.weight_copy_task
 
 	def _init_decoding_padding_bsz(self, padding_bsz):

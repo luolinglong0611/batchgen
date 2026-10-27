@@ -2044,6 +2044,9 @@ class BatchGenWorker:
 			for (seq, item), slot in zip(valid, reserved_slots):
 				actual_prompt_len = int(item["length"])
 				self._trajectory_book.write_prompt(slot, item["input_ids"])
+				if os.environ.get("R1_FULL_MODEL_TRACE", "0") == "1":
+					from scripts.r1_reproduction.r1_full_model_trace import record_input_tokens
+					record_input_tokens(seq.uuid, item["input_ids"], self.rank, self.world_size)
 				seq._buffer_slot = slot
 				# Token storage is now accessed through QueryBook; these fields are
 				# intentionally empty so no stale dense view can escape the book.
@@ -2924,6 +2927,9 @@ class BatchGenWorker:
 		"""
 		if not completed_uuids:
 			return {}
+		if os.environ.get("R1_FULL_MODEL_TRACE", "0") == "1":
+			from scripts.r1_reproduction.r1_full_model_trace import flush_layer_stats
+			flush_layer_stats(self.rank, self.world_size)
 
 		# Each rank provides tokens for its locally-owned completed sequences
 		my_tokens = {}
@@ -2933,6 +2939,9 @@ class BatchGenWorker:
 				seq = self.global_batch.get_sequence(uuid)
 				if seq is not None and local_idx in self.query_book:
 					decoded_tokens = self._trajectory_decoded_tokens(seq)
+					if os.environ.get("R1_FULL_MODEL_TRACE", "0") == "1":
+						from scripts.r1_reproduction.r1_full_model_trace import trace_bg_completion
+						trace_bg_completion(self, seq, decoded_tokens)
 					try:
 						text = self._decode_tokens_to_string(decoded_tokens)
 					except Exception:
@@ -3049,6 +3058,20 @@ class BatchGenWorker:
 			[batch_size, 1] selected token indices
 		"""
 		from batchgen.sampling import sample_tokens
+		if os.environ.get("R1_RUNTIME_AUDIT_DIR"):
+			import weakref
+			phase = getattr(getattr(self.model, "config", None), "phase", "unknown")
+			recorded = getattr(self, "_r1_runtime_recorded_models", None)
+			if recorded is None:
+				recorded = weakref.WeakKeyDictionary()
+				self._r1_runtime_recorded_models = recorded
+			if phase not in recorded.get(self.model, set()):
+				from scripts.r1_reproduction.r1_actual_runtime import record_bg
+				if record_bg(self, phase) is not None:
+					recorded.setdefault(self.model, set()).add(phase)
+		if os.environ.get("R1_FULL_MODEL_TRACE", "0") == "1":
+			from scripts.r1_reproduction.r1_full_model_trace import trace_bg_logits
+			trace_bg_logits(self, logits, batch_sequences)
 
 		if residency is not None:
 			if batch_rows is None:
@@ -4267,10 +4290,11 @@ class BatchGenWorker:
 		# This is used for completion criteria: prompt_length + decoded_length < context_length
 		model_max = getattr(self.model_config, 'max_position_embeddings', 131072)
 		client_max = getattr(self, 'max_context_length', None)
-		# Model's native context window is the only hard cap.
-		# Batch-level max_context_length should NOT override per-request max_tokens.
-		# Per-request values are ground truth (docs/input-format.md).
-		self.model_context_length = model_max
+		# Batch-level max_context_length does not override per-request max_tokens.
+		# The explicit R1 comparison can impose a smaller admission/reservation
+		# cap without editing the native model config or its RoPE parameters.
+		from batchgen.r1_alignment_controls import effective_context_limit
+		self.model_context_length = effective_context_limit(model_max, self.huggingface_ckpt_name)
 		if self.rank == 0:
 			logging.info(
 				f"Model context length set to {self.model_context_length} "
@@ -10975,6 +10999,93 @@ class BatchGenWorker:
 			self._persistent_phase_enabled(),
 		)
 
+	def _init_r1_fixed_gpu_kv(self) -> None:
+		"""Explicit R1 qualification capacity; keep the native allocator lifecycle."""
+		from batchgen.r1_alignment_controls import (
+			fixed_r1_gpu_kv_contract, fixed_r1_gpu_kv_available_bytes,
+			validate_fixed_r1_gpu_kv_allocator, validate_fixed_r1_gpu_kv_ranks,
+		)
+		from batchgen.kv_cache.host_kv_mananger_config import build_gpu_kv_config_fixed_size
+
+		report = {"rank": self.rank, "error": None, "lifecycle": "unknown"}
+		contract = None
+		manager = self.gpu_paged_kv_cache_manager
+		try:
+			# initializer.Init replaces worker.model_config with a compact native
+			# ModelConfig. The materialized decode module owns the HF config.
+			model_config = getattr(self.model, "config", None)
+			contract = fixed_r1_gpu_kv_contract(
+				model_identifier=self.huggingface_ckpt_name,
+				kv_dtype=self.engine_config.Basic_Config.kv_dtype,
+				graphs_enabled=self.engine_config.Basic_Config.enable_cuda_graphs,
+				device_capability=torch.cuda.get_device_capability(self.torch_device),
+				num_layers=getattr(model_config, "num_hidden_layers", None),
+				kv_lora_rank=getattr(model_config, "kv_lora_rank", None),
+				qk_rope_head_dim=getattr(model_config, "qk_rope_head_dim", None),
+			)
+			if contract is None or getattr(self, "_phase", None) != "decode":
+				raise ValueError("Explicit fixed R1 GPU KV initialization requires decode phase")
+			report["tokens_per_rank"] = contract["tokens_per_rank"]
+			bound = getattr(self, "_r1_fixed_gpu_kv_tokens", contract["tokens_per_rank"])
+			if bound != contract["tokens_per_rank"]:
+				raise ValueError("Cannot change fixed R1 GPU KV capacity during a worker lifetime")
+			config = build_gpu_kv_config_fixed_size(
+				model_name=self.huggingface_ckpt_name,
+				gpu_kv_cache_size_gb=contract["data_gib_per_rank"],
+			)
+			validate_fixed_r1_gpu_kv_allocator(config, contract)
+			initialized = manager is not None and manager.is_initialized
+			remap = manager is not None and getattr(manager, "uses_fixed_address_pool", False)
+			report["lifecycle"] = "reuse" if initialized else "remap" if remap else "create"
+			if initialized or remap:
+				validate_fixed_r1_gpu_kv_allocator(manager.config, contract)
+				if self.gpu_kv_cache_size_gb != contract["data_gib_per_rank"]:
+					raise ValueError("Existing R1 GPU KV allocation differs from explicit capacity")
+			if not initialized:
+				torch.cuda.synchronize(self.torch_device)
+				torch.cuda.empty_cache()
+				free_bytes, total_bytes = torch.cuda.mem_get_info(self.local_rank)
+				available = fixed_r1_gpu_kv_available_bytes(
+					free_bytes=free_bytes, total_bytes=total_bytes,
+					memory_fraction=self.gpu_memory_frac,
+				)
+				report.update(free_bytes=free_bytes, total_bytes=total_bytes,
+					available_under_fraction_bytes=available)
+				if contract["data_bytes_per_rank"] > available:
+					raise ValueError("Explicit R1 GPU KV target does not fit actual free memory/headroom")
+		except Exception as exc:
+			report["error"] = type(exc).__name__ + ": " + str(exc)
+		reports = [None] * self.world_size
+		dist.all_gather_object(reports, report)
+		validate_fixed_r1_gpu_kv_ranks(reports, self.world_size)
+
+		try:
+			self.gpu_kv_cache_size_gb = contract["data_gib_per_rank"]
+			if report["lifecycle"] == "remap":
+				self._remap_reused_kv_pool()
+			elif report["lifecycle"] == "create":
+				self._initialize_gpu_kv_manager_fixed_size()
+			manager = self.gpu_paged_kv_cache_manager
+			validate_fixed_r1_gpu_kv_allocator(manager.config, contract)
+			if not manager.is_initialized:
+				raise ValueError("Fixed R1 GPU KV allocator did not initialize")
+			if manager.get_stats().num_total_pages != contract["pages_per_layer"]:
+				raise ValueError("Actual R1 GPU KV allocator page count differs from requested capacity")
+		except Exception as exc:
+			report["error"] = type(exc).__name__ + ": " + str(exc)
+		reports = [None] * self.world_size
+		dist.all_gather_object(reports, report)
+		validate_fixed_r1_gpu_kv_ranks(reports, self.world_size)
+		# It is an explicit allocation, never a provisional memory-derived pool.
+		self._gpu_kv_sizing_provisional = False
+		self._gpu_kv_cached_pool_gb = contract["data_gib_per_rank"]
+		self._r1_fixed_gpu_kv_tokens = contract["tokens_per_rank"]
+		self._r1_fixed_gpu_kv_receipt = {**contract, "rank_reports": reports,
+			"status": "actual_allocator_capacity_verified_NOT_model_qualified"}
+		if self.rank == 0:
+			logging.info("[GPU-KV] Explicit R1 capacity: %s tokens/rank, %s pages, %.6f GiB/rank",
+				contract["tokens_per_rank"], contract["pages_per_layer"], contract["data_gib_per_rank"])
+
 	def _init_gpu_kv_with_actual_size(self) -> None:
 		"""
 		Calculate actual GPU KV size AFTER model loading and initialize the manager.
@@ -10983,6 +11094,9 @@ class BatchGenWorker:
 		Only runs the full calculation and initialization on the first call;
 		subsequent calls skip if the manager is already initialized.
 		"""
+		if os.environ.get("BATCHGEN_R1_GPU_KV_TOKENS") is not None:
+			self._init_r1_fixed_gpu_kv()
+			return
 		# Skip if GPU KV manager is already initialized (subsequent decode iterations)
 		if self.gpu_paged_kv_cache_manager is not None and self.gpu_paged_kv_cache_manager.is_initialized:
 			return
