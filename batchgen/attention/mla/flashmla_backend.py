@@ -7,6 +7,8 @@ if common_attention_enabled():
 else:
 	from flash_mla import flash_mla_with_kvcache, get_mla_metadata
 from .rotary_embedding import rotary_pos_emb
+from .decode_position_validation import decode_position_max
+from .decode_weight_cache import get_mla_decode_weight
 import logging
 from ..quantization import dequant_per_token_triton, dequant_per_token_return_with_max_seqlen_pad
 import triton
@@ -1283,10 +1285,11 @@ def mla_decoding_flashmla_attn_mode_3_bf16_with_pagekv(
 	q_pe = q_pe.contiguous()
 	cos, sin = self.rotary_emb(q_pe, seq_len=max_seqlen)
 	
-	# Compute max position ID for RoPE validation
+	# Share the scalar readback across this eager model forward when scoped.
+	# The actual RoPE cache bound is still checked independently by every layer.
 	# Note: bsz > 0 is guaranteed here (empty batch returns early above)
 	try:
-		max_pos_id = q_position_ids.max().item()
+		max_pos_id = decode_position_max(q_position_ids)
 	except Exception as e:
 		logging.error(
 			f"[Layer {layer_idx}] FAILED to compute q_position_ids.max(): {e}. "
@@ -1351,9 +1354,10 @@ def mla_decoding_flashmla_attn_mode_3_bf16_with_pagekv(
 		f"This indicates GPU page table is out of sync with the current batch."
 	)
 
-	kv_b_proj = deepseek_v3_dequantization(
-		self.kv_b_proj.weight.data,
-		weight_scale["kv_b_proj.weight_scale_inv"],
+	# Persistent decode weights reuse the same BF16 matrix. Keep the original
+	# views/strides and absorption einsums; streamed/unversioned weights stay fresh.
+	kv_b_proj = get_mla_decode_weight(
+		self, weight_scale, deepseek_v3_dequantization,
 	).view(self.num_heads, -1, self.kv_lora_rank)
 	q_absorb = kv_b_proj[:, : self.qk_nope_head_dim, :]
 	out_absorb = kv_b_proj[:, self.qk_nope_head_dim :, :]

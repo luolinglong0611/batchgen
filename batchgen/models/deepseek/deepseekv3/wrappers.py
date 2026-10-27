@@ -24,7 +24,6 @@ Provides wrappers for DeepSeek-R1 and DeepSeek-V3 models with FP8 quantization:
 """
 
 import logging
-import os
 from typing import Dict, Optional, Tuple
 
 import torch
@@ -36,19 +35,6 @@ from batchgen.attention.mla.decode_weight_cache import (
     clear_mla_decode_weight_cache,
     configure_mla_decode_weight_cache,
 )
-
-
-def _read_decode_attention_micro_batch_size():
-    """Opt in to the paged decoder's existing per-layer slice/merge path.
-
-    Zero (the default) keeps the previous one-call local attention batch. This
-    is independent of the rank admission limit and MoE communication buffers.
-    """
-    name = "BATCHGEN_DECODE_ATTN_MICRO_BATCH_SIZE"
-    raw = os.environ.get(name, "0")
-    if not raw.isascii() or not raw.isdecimal():
-        raise ValueError(f"{name} must be a non-negative integer (0 disables)")
-    return int(raw)
 
 
 class DeepSeekExpertWrapper(ExpertWrapperBase):
@@ -239,13 +225,6 @@ class DeepSeekAttnWrapper(AttnWrapperBase):
         self.fp8_o_proj = None
         # Only _register_fp8_weights may enable reuse after resident loading.
         configure_mla_decode_weight_cache(self.module, enabled=False)
-        self.decode_attn_micro_batch_size = _read_decode_attention_micro_batch_size()
-        if self.decode_attn_micro_batch_size and self.layer_idx == 0:
-            logging.info(
-                "[ATTN-MICROBATCH] paged decode attention chunk=%d; "
-                "merge all local rows before the decoder layer's MoE",
-                self.decode_attn_micro_batch_size,
-            )
 
     def _register_fp8_weights(self):
         """Cache FP8 attention weights for MLA architecture."""
@@ -411,54 +390,16 @@ class DeepSeekAttnWrapper(AttnWrapperBase):
         # Check if using paged KV (GPUPagedKVCacheManager)
         if gpu_paged_kv_manager is not None:
             # BF16 paged KV path
-            chunk_size = self.decode_attn_micro_batch_size
-            batch_size = hidden_states.shape[0]
-            if chunk_size and batch_size > chunk_size:
-                if hidden_states.is_cuda and torch.cuda.is_current_stream_capturing():
-                    raise RuntimeError("MLA decode micro-batching currently requires CUDA Graph OFF")
-                from batchgen.attention.mla.decode_microbatch_scope import (
-                    decode_attention_microbatch_scope,
-                )
-
-                if hidden_states.ndim != 3 or hidden_states.shape[1] != 1:
-                    raise ValueError("MLA decode micro-batching requires [batch, 1, hidden] inputs")
-                if (position_ids is None or cache_seqlens is None
-                        or position_ids.shape[0] != batch_size
-                        or cache_seqlens.shape[0] != batch_size):
-                    raise ValueError("MLA decode micro-batch metadata must match the full local batch")
-                # Same per-layer order as Wrapper_dep.Attn_Wrapper mode 3:
-                # finish each attention slice, assemble local rows, then return
-                # once so the decoder layer calls MoE once on the full batch.
-                attn_output = torch.empty_like(hidden_states)
-                all_k_tensors = []
-                for start in range(0, batch_size, chunk_size):
-                    end = min(start + chunk_size, batch_size)
-                    with decode_attention_microbatch_scope(
-                        gpu_paged_kv_manager, position_ids, cache_seqlens,
-                        start, end,
-                    ) as (micro_positions, micro_lengths):
-                        micro_output, micro_k = self.module.decoding_attn_mode_3_bf16(
-                            hidden_states[start:end], micro_positions, micro_lengths,
-                            max_seqlen, self.weight_dequant_scale,
-                            gpu_paged_kv_manager, self.layer_idx, (start, end),
-                        )
-                    if (micro_output.shape != hidden_states[start:end].shape
-                            or micro_k.shape[0] != end - start):
-                        raise ValueError("MLA decode backend returned inconsistent micro-batch rows")
-                    attn_output[start:end].copy_(micro_output)
-                    all_k_tensors.append(micro_k)
-                k_tensor = torch.cat(all_k_tensors, dim=0)
-            else:
-                attn_output, k_tensor = self.module.decoding_attn_mode_3_bf16(
-                    hidden_states,
-                    position_ids,
-                    cache_seqlens,
-                    max_seqlen,
-                    self.weight_dequant_scale,
-                    gpu_paged_kv_manager,
-                    self.layer_idx,
-                    None  # batch_slice (handled by gpu_paged_kv_manager)
-                )
+            attn_output, k_tensor = self.module.decoding_attn_mode_3_bf16(
+                hidden_states,
+                position_ids,
+                cache_seqlens,
+                max_seqlen,
+                self.weight_dequant_scale,
+                gpu_paged_kv_manager,
+                self.layer_idx,
+                None  # batch_slice (handled by gpu_paged_kv_manager)
+            )
 
             # Offload k_tensor via KV append callback if available
             if AttnWrapperBase.kv_append_callback is not None:
@@ -467,10 +408,6 @@ class DeepSeekAttnWrapper(AttnWrapperBase):
             # Return tuple (attn_output is all that's needed - KV managed externally)
             return (attn_output, None, None)
         else:
-            if self.decode_attn_micro_batch_size:
-                raise ValueError(
-                    "BATCHGEN_DECODE_ATTN_MICRO_BATCH_SIZE currently requires the paged BF16 KV path"
-                )
             # FP8 KV cache with tensor references
             # Get layer-specific KV cache slice
             layer_past_key = past_key_states[self.layer_idx] if past_key_states else None

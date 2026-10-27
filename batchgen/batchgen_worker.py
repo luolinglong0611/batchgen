@@ -17124,6 +17124,18 @@ class BatchGenWorker:
 
 	def _glm5_decode_model_forward(self, new_tokens: torch.Tensor):
 		def _forward():
+			from batchgen.attention.mla.compat_selection import common_attention_enabled
+			if common_attention_enabled():
+				from batchgen.attention.mla.common_flashinfer_backend import decode_forward_scope
+				# The current eager model forward has one ordered row set and
+				# page table for all layers; this scope never survives a step.
+				with decode_forward_scope(AttnWrapperBase.gpu_paged_kv_manager):
+					return self.model(
+						new_tokens,
+						attention_mask=Attn_Wrapper.attention_mask,
+						position_ids=Attn_Wrapper.position_ids,
+						use_cache=False,
+					)
 			return self.model(
 				new_tokens,
 				attention_mask=Attn_Wrapper.attention_mask,
@@ -17140,6 +17152,17 @@ class BatchGenWorker:
 		model_name_l = (getattr(self, "model_name", "") or "").lower()
 		if "glm" in model_name_l and self._glm5_whole_model_graph_requested_for_current_batch():
 			with self._glm5_force_segmented_graph_eager():
+				return _forward()
+		# DeepSeek paged MLA shares one position tensor across its eager layers.
+		# Read its maximum before projection launches, then keep each layer's
+		# own RoPE bound check. The scope cannot outlive this model call.
+		if (
+			getattr(getattr(self.model, "config", None), "model_type", None) == "deepseek_v3"
+			and AttnWrapperBase.gpu_paged_kv_manager is not None
+			and Attn_Wrapper.position_ids.numel() > 0
+		):
+			from batchgen.attention.mla.decode_position_validation import mla_decode_position_scope
+			with mla_decode_position_scope(Attn_Wrapper.position_ids):
 				return _forward()
 		return _forward()
 
