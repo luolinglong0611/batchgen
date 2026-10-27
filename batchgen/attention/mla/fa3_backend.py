@@ -5,7 +5,11 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from flash_attn_interface import flash_attn_varlen_func
+from .compat_selection import common_attention_enabled
+if common_attention_enabled():
+	from .common_flashinfer_backend import flash_attn_varlen_func
+else:
+	from flash_attn_interface import flash_attn_varlen_func
 from .padding import _upad_input, pad_input
 from .rotary_embedding import mla_rotary_pos_emb, rotary_pos_emb, apply_rotary_pos_emb
 from batchgen.gemm.r1_sm103_compat import fp8_gemm_nt, sm103_fp8_compat_enabled, w8a16_gemm as sm103_w8a16_gemm

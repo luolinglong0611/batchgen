@@ -1,10 +1,11 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from flash_mla import (
-	flash_mla_with_kvcache,
-	get_mla_metadata,
-)
+from .compat_selection import common_attention_enabled
+if common_attention_enabled():
+	from .common_flashinfer_backend import flash_mla_with_kvcache, get_mla_metadata
+else:
+	from flash_mla import flash_mla_with_kvcache, get_mla_metadata
 from .rotary_embedding import rotary_pos_emb
 import logging
 from ..quantization import dequant_per_token_triton, dequant_per_token_return_with_max_seqlen_pad
@@ -798,6 +799,19 @@ from .fused_rmsnorm_rope import (
 )
 from batchgen.kv_cache.gpu_paged_kv_manager import GPUPagedKVCacheManager
 from batchgen.gemm.w8a8_deepgemm import w8a8_deepgemm
+
+
+def _r1_paged_rope_output_layout(module):
+	"""Current explicit R1 shim consumes native-interleaved packed prompt KV."""
+	if not common_attention_enabled():
+		return "split_half"
+	expected = {"num_heads": 128, "kv_lora_rank": 512, "qk_rope_head_dim": 64,
+		"qk_nope_head_dim": 128, "v_head_dim": 128}
+	if any(getattr(module, name, None) != value for name, value in expected.items()):
+		raise ValueError("R1 native RoPE compatibility requires the original R1 attention geometry")
+	return "native_interleaved"
+
+
 @triton.jit
 def quantize_and_scatter_kernel(
 	input_bf16_ptr,           # [bsz, 1, total_dim] - input
@@ -1305,6 +1319,7 @@ def mla_decoding_flashmla_attn_mode_3_bf16_with_pagekv(
 		self.kv_a_layernorm.weight,
 		self.kv_lora_rank,
 		self.qk_rope_head_dim,
+		output_layout=_r1_paged_rope_output_layout(self),
 	)
 
 	manager_device = gpu_paged_kv_manager.device

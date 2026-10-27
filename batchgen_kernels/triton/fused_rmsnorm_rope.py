@@ -1,6 +1,38 @@
 import triton
 import triton.language as tl
 import torch
+import hashlib
+import os
+from pathlib import Path
+
+
+_LAYOUT_AUDIT_ENABLED = all(os.environ.get(name) for name in (
+    "R1_RUNTIME_AUDIT_DIR", "R1_RUNTIME_RUN_ID", "R1_RUNTIME_DEPLOYMENT_SHA"))
+_LAYOUT_CALLS = {}
+_LAYOUT_SOURCE = None
+
+
+def _record_layout_call(layout, kv, q):
+    global _LAYOUT_SOURCE
+    if _LAYOUT_SOURCE is None:
+        path = Path(__file__).resolve()
+        _LAYOUT_SOURCE = {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+    key = (layout, tuple(kv.shape), tuple(q.shape), str(kv.dtype), str(q.dtype))
+    _LAYOUT_CALLS[key] = _LAYOUT_CALLS.get(key, 0) + 1
+
+
+def layout_receipt():
+    """Read CPU-only receipts of returned wrapper calls; never query a GPU."""
+    return {"schema": "r1-fused-rope-layout-observation-v1",
+            "status": "wrapper_calls_observed" if _LAYOUT_CALLS else "no_wrapper_calls_observed",
+            "audit_enabled_at_import": _LAYOUT_AUDIT_ENABLED,
+            "source": dict(_LAYOUT_SOURCE) if _LAYOUT_SOURCE else None,
+            "calls": [{"output_layout": key[0], "kv_shape": list(key[1]), "q_shape": list(key[2]),
+                       "kv_dtype": key[3], "q_dtype": key[4], "count": count,
+                       "rope_arithmetic": "FP32_separate_products_and_sum_v3" if key[0] == "native_interleaved" else "legacy_fused_BF16_operands"}
+                      for key, count in sorted(_LAYOUT_CALLS.items())],
+            "observation": "wrapper_returned_after_kernel_enqueue_NOT_GPU_completion"}
+
 @triton.jit
 def fused_rmsnorm_rope_kernel(
     data_ptr,
@@ -623,6 +655,49 @@ def fused_rmsnorm_rope_with_q_kernel(
             )
 
 
+@triton.jit
+def r1_native_rope_fp32_kernel(
+    raw_kv_ptr,
+    original_q_ptr,
+    processed_kv_ptr,
+    q_output_ptr,
+    cos_ptr,
+    sin_ptr,
+    position_ids_ptr,
+    num_heads,
+    kv_lora_rank,
+    qk_rope_head_dim,
+    BLOCK_PAIRS: tl.constexpr,
+):
+    """R1 compatibility only: native Q/K with main's FP32 eager arithmetic.
+
+    Launch with enable_fp_fusion=False. Do not write the latent RMSNorm slice;
+    it was produced by the unchanged legacy kernel. No rounding to BF16 occurs
+    until each final store, and valid NaNs propagate without sanitization.
+    """
+    row = tl.program_id(0)
+    pair = tl.arange(0, BLOCK_PAIRS)
+    mask = pair < qk_rope_head_dim // 2
+    position = tl.load(position_ids_ptr + row)
+    cosine = tl.load(cos_ptr + position * qk_rope_head_dim + pair, mask=mask, other=1.0).to(tl.float32)
+    sine = tl.load(sin_ptr + position * qk_rope_head_dim + pair, mask=mask, other=0.0).to(tl.float32)
+    base = row * (kv_lora_rank + qk_rope_head_dim) + kv_lora_rank
+    k_even = tl.load(raw_kv_ptr + base + 2 * pair, mask=mask, other=0.0).to(tl.float32)
+    k_odd = tl.load(raw_kv_ptr + base + 2 * pair + 1, mask=mask, other=0.0).to(tl.float32)
+    k_rot_even = k_even * cosine - k_odd * sine
+    k_rot_odd = k_even * sine + k_odd * cosine
+    tl.store(processed_kv_ptr + base + 2 * pair, k_rot_even, mask=mask)
+    tl.store(processed_kv_ptr + base + 2 * pair + 1, k_rot_odd, mask=mask)
+    for head in range(num_heads):
+        q_base = (row * num_heads + head) * qk_rope_head_dim
+        q_even = tl.load(original_q_ptr + q_base + 2 * pair, mask=mask, other=0.0).to(tl.float32)
+        q_odd = tl.load(original_q_ptr + q_base + 2 * pair + 1, mask=mask, other=0.0).to(tl.float32)
+        q_rot_even = q_even * cosine - q_odd * sine
+        q_rot_odd = q_even * sine + q_odd * cosine
+        tl.store(q_output_ptr + q_base + 2 * pair, q_rot_even, mask=mask)
+        tl.store(q_output_ptr + q_base + 2 * pair + 1, q_rot_odd, mask=mask)
+
+
 def fused_rmsnorm_rope_with_q(
     new_compressed_kv: torch.Tensor,
     q_pe: torch.Tensor,
@@ -633,8 +708,17 @@ def fused_rmsnorm_rope_with_q(
     kv_lora_rank: int,
     qk_rope_head_dim: int,
     eps: float = 1e-6,
+    *,
+    output_layout: str = "split_half",
 ) -> torch.Tensor:
-    """Apply fused RMSNorm + RoPE to KV and Q without cache updates."""
+    """Apply RMSNorm/RoPE, with an explicit R1 native FP32 compatibility route.
+
+    Legacy output and latent RMSNorm arithmetic remain unchanged. Native R1
+    Q/K are recomputed from original inputs using the fresh-prefill helper's
+    FP32 separate-product arithmetic, then cast only at the output stores.
+    """
+    if output_layout not in ("split_half", "native_interleaved"):
+        raise ValueError("Unsupported fused RMSNorm/RoPE output layout")
     bsz, q_len, total_dim = new_compressed_kv.shape
     assert q_len == 1, "This kernel assumes q_len = 1 for decoding"
     assert total_dim == kv_lora_rank + qk_rope_head_dim
@@ -645,6 +729,7 @@ def fused_rmsnorm_rope_with_q(
     num_heads = q_pe.shape[1]
     assert q_pe.shape == (bsz, num_heads, 1, qk_rope_head_dim)
 
+    original_q = q_pe.clone() if output_layout == "native_interleaved" else None
     processed_kv = torch.empty_like(new_compressed_kv)
     grid = (bsz,)
 
@@ -664,6 +749,20 @@ def fused_rmsnorm_rope_with_q(
         BLOCK_SIZE=64,
     )
 
+    if output_layout == "native_interleaved":
+        # V1's inverse permutation preserved the legacy BF16 operand rounding
+        # and failed the fixed one-ULP gate. Recompute only Q/K_rope from raw
+        # inputs, retaining exactly the legacy latent RMSNorm bytes. This
+        # deliberately performs an extra kernel; it is no throughput tuning.
+        r1_native_rope_fp32_kernel[grid](
+            new_compressed_kv, original_q, processed_kv, q_pe, cos, sin,
+            position_ids, num_heads, kv_lora_rank, qk_rope_head_dim,
+            BLOCK_PAIRS=triton.next_power_of_2(qk_rope_head_dim // 2),
+            enable_fp_fusion=False,
+        )
+
+    if _LAYOUT_AUDIT_ENABLED:
+        _record_layout_call(output_layout, processed_kv, q_pe)
     return processed_kv
 
 

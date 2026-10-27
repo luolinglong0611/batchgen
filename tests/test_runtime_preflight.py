@@ -256,3 +256,91 @@ def test_wgmma_decode_selected_only_on_h20(monkeypatch, capability, sm_count, ex
 
     preflight.run_runtime_preflight(SimpleNamespace(model="openai/gpt-oss-120b"))
     assert ("batchgen_kernels.attention.decode" in imported) == expect_wgmma
+
+
+@pytest.fixture
+def explicit_r1_profile(monkeypatch):
+    monkeypatch.setenv("BATCHGEN_R1_SM103_MLA_COMPAT", "flashinfer-fa2")
+    monkeypatch.setenv("BATCHGEN_R1_SM103_FP8_COMPAT", "1")
+    monkeypatch.setenv("DISABLE_MMA_V5", "1")
+    monkeypatch.setattr(preflight.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(preflight.torch.cuda, "get_device_capability", lambda *_: (10, 3))
+    monkeypatch.setattr(preflight.importlib.metadata, "version", lambda _: "0.5.2")
+    return SimpleNamespace(model="deepseek-ai/DeepSeek-R1", disable_cuda_graphs=True,
+                           enable_cuda_graph=False, kv_dtype="bfloat16")
+
+
+def test_explicit_r1_profile_declares_both_required_aot_modules(explicit_r1_profile):
+    contract = preflight._selected_contract("deepseek_v3", explicit_r1_profile)
+    assert contract.modules == ("flashinfer", "libucx")
+    assert contract.extensions == (
+        "batchgen_kernels.common._C_mgn_ops",
+        "batchgen_kernels.moe._C_fused_moe_token_permutation",
+    )
+    assert not contract.require_deepgemm
+
+
+@pytest.mark.parametrize("attention,gemm", [("0", "1"), ("flashinfer-fa2", "0")])
+def test_partial_r1_profile_never_selects_an_implicit_fallback(monkeypatch, explicit_r1_profile, attention, gemm):
+    monkeypatch.setenv("BATCHGEN_R1_SM103_MLA_COMPAT", attention)
+    monkeypatch.setenv("BATCHGEN_R1_SM103_FP8_COMPAT", gemm)
+    with pytest.raises(preflight.RuntimePreflightError, match="requires both explicit"):
+        preflight._selected_contract("deepseek_v3", explicit_r1_profile)
+
+
+@pytest.mark.parametrize("disable,enable", [(False, False), (False, True), (True, True)])
+def test_explicit_r1_profile_refuses_every_graph_enabled_or_implicit_case(explicit_r1_profile, disable, enable):
+    explicit_r1_profile.disable_cuda_graphs = disable
+    explicit_r1_profile.enable_cuda_graph = enable
+    with pytest.raises(preflight.RuntimePreflightError, match="disable-cuda-graphs"):
+        preflight._selected_contract("deepseek_v3", explicit_r1_profile)
+
+
+@pytest.mark.parametrize("kv_dtype", [None, "auto", "bf16", "float8_e4m3fn", "float16"])
+def test_explicit_r1_profile_requires_bfloat16_kv(explicit_r1_profile, kv_dtype):
+    explicit_r1_profile.kv_dtype = kv_dtype
+    with pytest.raises(preflight.RuntimePreflightError, match="BF16 KV"):
+        preflight._selected_contract("deepseek_v3", explicit_r1_profile)
+
+
+@pytest.mark.parametrize("available,capability", [(False, (10, 3)), (True, (10, 0)), (True, (9, 0)), (True, (8, 9))])
+def test_explicit_r1_profile_requires_actual_cuda_sm103(monkeypatch, explicit_r1_profile, available, capability):
+    monkeypatch.setattr(preflight.torch.cuda, "is_available", lambda: available)
+    monkeypatch.setattr(preflight.torch.cuda, "get_device_capability", lambda *_: capability)
+    with pytest.raises(preflight.RuntimePreflightError, match="actual CUDA capability 10.3"):
+        preflight._selected_contract("deepseek_v3", explicit_r1_profile)
+
+
+@pytest.mark.parametrize("version", ["0.5.1", "0.6.13", "0.5.2.post1"])
+def test_explicit_r1_profile_requires_the_exact_common_fi_version(monkeypatch, explicit_r1_profile, version):
+    monkeypatch.setattr(preflight.importlib.metadata, "version", lambda _: version)
+    with pytest.raises(preflight.RuntimePreflightError, match="flashinfer-python==0.5.2"):
+        preflight._selected_contract("deepseek_v3", explicit_r1_profile)
+
+
+@pytest.mark.parametrize("model_type,model", [("deepseek_v3", "deepseek-ai/DeepSeek-V3"),
+                                            ("gpt_oss", "openai/gpt-oss-120b"),
+                                            ("deepseek_v2", "deepseek-ai/DeepSeek-R1")])
+def test_explicit_r1_profile_cannot_affect_another_model(explicit_r1_profile, model_type, model):
+    explicit_r1_profile.model = model
+    with pytest.raises(preflight.RuntimePreflightError, match="restricted to DeepSeek-R1"):
+        preflight._selected_contract(model_type, explicit_r1_profile)
+
+
+def test_explicit_r1_profile_requires_the_triton_arch_compatibility_flag(monkeypatch, explicit_r1_profile):
+    monkeypatch.delenv("DISABLE_MMA_V5")
+    with pytest.raises(preflight.RuntimePreflightError, match="DISABLE_MMA_V5=1"):
+        preflight._selected_contract("deepseek_v3", explicit_r1_profile)
+
+
+@pytest.mark.parametrize("model_type", ["deepseek_v3", "gpt_oss", "mixtral"])
+def test_native_default_contract_is_identical_without_compatibility_flags(monkeypatch, model_type):
+    monkeypatch.delenv("BATCHGEN_R1_SM103_MLA_COMPAT", raising=False)
+    monkeypatch.delenv("BATCHGEN_R1_SM103_FP8_COMPAT", raising=False)
+
+    def unexpected(*args):
+        raise AssertionError("Native default must not probe the SM103/FI compatibility implementation")
+
+    monkeypatch.setattr(preflight.torch.cuda, "is_available", unexpected)
+    monkeypatch.setattr(preflight.importlib.metadata, "version", unexpected)
+    assert preflight._selected_contract(model_type, SimpleNamespace(model="native-default")) is preflight._CONTRACTS[model_type]

@@ -386,6 +386,43 @@ def _resolve_model_type(model: str) -> str:
     return model_type
 
 
+def _selected_contract(model_type: str, server_args: object) -> RuntimeContract:
+    """Use the declared R1 compatibility dependencies only when explicitly selected.
+
+    This changes the required implementation, never treats missing native
+    modules as an implicit fallback, and retains the AOT core/kernel checks.
+    """
+    from batchgen.attention.mla.compat_selection import common_attention_enabled
+    from batchgen.gemm.r1_sm103_compat import sm103_fp8_compat_enabled
+
+    attention, gemm = common_attention_enabled(), sm103_fp8_compat_enabled()
+    if not attention and not gemm:
+        return _CONTRACTS[model_type]
+    if model_type != "deepseek_v3" or "deepseek-r1" not in str(server_args.model).lower():
+        raise RuntimePreflightError("The explicit SM103 compatibility profile is restricted to DeepSeek-R1")
+    if not attention or not gemm:
+        raise RuntimePreflightError("The R1 SM103 server profile requires both explicit attention and FP8 compatibility selections")
+    if not torch.cuda.is_available() or tuple(torch.cuda.get_device_capability()) != (10, 3):
+        raise RuntimePreflightError("The explicit R1 compatibility profile requires actual CUDA capability 10.3")
+    if (not getattr(server_args, "disable_cuda_graphs", False)
+            or getattr(server_args, "enable_cuda_graph", False)):
+        raise RuntimePreflightError("The R1 compatibility profile requires explicit --disable-cuda-graphs")
+    if getattr(server_args, "kv_dtype", None) != "bfloat16":
+        raise RuntimePreflightError("The R1 compatibility profile preserves BF16 KV only")
+    if os.environ.get("DISABLE_MMA_V5") != "1":
+        raise RuntimePreflightError("The R1 compatibility profile requires explicit DISABLE_MMA_V5=1")
+    if importlib.metadata.version("flashinfer-python") != "0.5.2":
+        raise RuntimePreflightError("The common R1 attention implementation requires flashinfer-python==0.5.2")
+    logger.warning("[runtime-preflight] explicitly selected R1 SM103 BF16 FlashInfer fa2 / FP32-scale Triton compatibility")
+    return RuntimeContract(
+        modules=("flashinfer", "libucx"),
+        extensions=(
+            "batchgen_kernels.common._C_mgn_ops",
+            "batchgen_kernels.moe._C_fused_moe_token_permutation",
+        ),
+    )
+
+
 def run_runtime_preflight(server_args: object) -> str:
     """Validate the exact model runtime before server resources are allocated."""
 
@@ -401,7 +438,7 @@ def run_runtime_preflight(server_args: object) -> str:
         )
     _check_torch()
     model_type = _resolve_model_type(model)
-    contract = _CONTRACTS[model_type]
+    contract = _selected_contract(model_type, server_args)
     # H20 = sm_90 with 78 SMs; device names are not reliable across SKUs.
     decode_backend = (
         "wgmma"
@@ -416,7 +453,7 @@ def run_runtime_preflight(server_args: object) -> str:
         module = _import_required(
             module_name,
             origin=_ORIGIN_SITE
-            if module_name in {"flash_attn_interface", "flash_attn", "flash_mla"}
+            if module_name in {"flash_attn_interface", "flash_attn", "flash_mla", "flashinfer"}
             else None,
         )
         if module_name == "libucx":
