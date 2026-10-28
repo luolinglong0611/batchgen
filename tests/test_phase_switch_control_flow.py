@@ -274,6 +274,7 @@ def test_deep_free_drops_the_parallel_manager_model_reference():
         parallel_manager=manager,
         _cuda_graph_adapter=None,
         _glm5_layer_graph_failed_buckets=set(),
+        _log_phase_memory_ledger=lambda *_args: None,
     )
 
     deep_free(worker)
@@ -308,6 +309,7 @@ def test_deep_free_leaves_persistent_instances_alone():
         parallel_manager=manager,
         _cuda_graph_adapter=None,
         _glm5_layer_graph_failed_buckets=set(),
+        _log_phase_memory_ledger=lambda *_args: None,
     )
 
     deep_free(worker)

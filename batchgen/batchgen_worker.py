@@ -10131,7 +10131,8 @@ class BatchGenWorker:
 			# a diagnostic mode/profile override) before rebuilding that phase.
 			self._k3_startup_prefill_ready = False
 			logging.info("Deep freeing model memory before prefill config...")
-			self.deep_free_model_memory()
+			if not self._retain_r1_phase_model_for_switch():
+				self.deep_free_model_memory()
 			self._assert_phase_switch_clean("decode_to_prefill", reused=False)
 
 		# CRITICAL: Destroy GPU KV cache BEFORE configure_prefill (Bug Fix 7.2)
@@ -10416,6 +10417,11 @@ class BatchGenWorker:
 		if self._persistent_phase_enabled():
 			self._activate_persistent_decode_instance(comm)
 			return
+		if (self._r1_phase_model_reuse_active()
+				and self.parallel_manager._r1_shared_phase_state.phase == "decode"):
+			# A decode interval without intervening prefill already owns the
+			# same model, LL geometry and registered immutable weights.
+			return
 		if self._decode_instance_is_active():
 			# decode -> decode interval: the reused instance is already switched
 			# in, its experts mapped and its graphs captured. Same early return
@@ -10465,7 +10471,8 @@ class BatchGenWorker:
 				logging.info("[DECODE] Reused decode instance activated")
 			return
 
-		self.deep_free_model_memory()
+		if not self._retain_r1_phase_model_for_switch():
+			self.deep_free_model_memory()
 		_nv_t0 = time.perf_counter()
 		self.init_nvshmem()
 		_nv_dt = time.perf_counter() - _nv_t0
@@ -10481,7 +10488,8 @@ class BatchGenWorker:
 		# they are sized once for the largest batch admission can ever hand
 		# them, not for this batch. _max_decode_rank_bsz() is the cap the
 		# estimate above was already clamped to.
-		padding_bsz = self._max_decode_rank_bsz() if reuse_requested else max_num_seq
+		padding_bsz = (self._max_decode_rank_bsz()
+			if reuse_requested or self._r1_phase_model_reuse_active() else max_num_seq)
 		# Unified method handles all deployment scenarios
 		self.model, self.weight_copy_task = self.parallel_manager.configure_decoding(
 			padding_bsz=padding_bsz, comm=comm
@@ -10677,6 +10685,40 @@ class BatchGenWorker:
 				"reserved addresses are what make the remap free"
 			)
 
+	def _r1_phase_model_reuse_active(self) -> bool:
+		"""R1's single resident model; separate from the dual-instance API."""
+		pm = getattr(self, "parallel_manager", None)
+		available = getattr(pm, "r1_phase_model_available", None)
+		if not callable(available) or not available():
+			return False
+		if getattr(getattr(self, "args", None), "persistent_phase_instances", False):
+			raise RuntimeError("R1 single-model reuse cannot combine with dual persistent instances")
+		if self.model is not pm.model:
+			raise RuntimeError("Worker/PSM R1 resident model ownership differs")
+		return True
+
+	def _retain_r1_phase_model_for_switch(self) -> bool:
+		"""Drain phase work and old KV graphs while keeping immutable weights."""
+		if not self._r1_phase_model_reuse_active():
+			return False
+		if getattr(self, "_pending_kv_append_tasks", None):
+			self._wait_pending_kv_append_tasks()
+		AttnWrapperBase.retire_pending_prefill_offloads(
+			device=self.torch_device, reason="R1 resident phase handoff")
+		state = getattr(self, "_r1_whole_decode_state", None)
+		if state is not None and state.record is not None:
+			state.invalidate(reason="r1_phase_handoff_KV_rebuild")
+		from batchgen.attention.mla.r1_decode_cuda_graph import release_attention_graph
+		for layer in self.model.model.layers:
+			release_attention_graph(layer.self_attn)
+		if getattr(self, "_cuda_graph_adapter", None) is not None:
+			self._cuda_graph_adapter.release_context()
+		torch.cuda.synchronize(self.torch_device)
+		logging.info("[R1-PHASE-HANDOFF] rank=%d keep_single_model=true "
+		             "weight_generation=%d old_KV_graphs_released=true",
+		             self.rank, self.model._r1_weight_generation)
+		return True
+
 	def _request_phase_instance_reuse(self) -> bool:
 		"""Ask the strategy manager to keep this process's phase instances.
 
@@ -10784,7 +10826,8 @@ class BatchGenWorker:
 		re-entered capture, and nulled every attention wrapper's fused
 		Q-A/KV-A pointers, which that capture requires.
 		"""
-		if self._persistent_phase_enabled() or self._decode_instance_is_reusable():
+		if (self._persistent_phase_enabled() or self._decode_instance_is_reusable()
+				or self._r1_phase_model_reuse_active()):
 			return
 		self._unregister_fp8_weights()
 		self.deep_free_model_memory()
@@ -21163,6 +21206,10 @@ class BatchGenWorker:
 			return True
 
 	def _unregister_fp8_weights(self):
+		if self._r1_phase_model_reuse_active():
+			# The very same persistent wrappers/ordinary banks serve the next
+			# phase; clearing their FP8 aliases would break the next replay.
+			return
 		# Skip FP8 unregistration for models that don't use FP8 (e.g., GPT-OSS uses MXFP4)
 		if not hasattr(self.loaded_model_config, 'first_k_dense_replace'):
 			return
@@ -21204,6 +21251,9 @@ class BatchGenWorker:
 		_r1_whole_state = getattr(self, "_r1_whole_decode_state", None)
 		if _r1_whole_state is not None and _r1_whole_state.record is not None:
 			_r1_whole_state.invalidate(reason="decode_model_release")
+		_r1_release = getattr(getattr(self, "parallel_manager", None), "release_r1_phase_model", None)
+		if callable(_r1_release):
+			_r1_release()
 		if not hasattr(self, 'model') or self.model is None:
 			return
 

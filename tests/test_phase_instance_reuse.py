@@ -35,6 +35,7 @@ import ast
 import contextlib
 import copy
 import importlib.util
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
@@ -66,6 +67,9 @@ def _method_ast(name):
 
 def _isolated(names, **globals_override):
     """A bare class carrying the named worker methods."""
+    names = list(names)
+    if "_finish_decode_interval" in names and "_r1_phase_model_reuse_active" not in names:
+        names.append("_r1_phase_model_reuse_active")
     bodies = [copy.deepcopy(_method_ast(name)) for name in names]
     module = ast.Module(
         body=[
@@ -80,7 +84,7 @@ def _isolated(names, **globals_override):
         type_ignores=[],
     )
     # Seeded, not only patched afterwards: annotations evaluate at def time.
-    namespace = dict(globals_override)
+    namespace = {"os": os, **globals_override}
     exec(compile(ast.fix_missing_locations(module), str(WORKER), "exec"), namespace)
     cls = namespace["Worker"]
     for name in names:
@@ -554,7 +558,7 @@ def test_the_first_build_sizes_for_the_largest_admissible_batch():
     """A reused instance's padded MoE buffers are never rebuilt."""
     src = ast.unparse(_method_ast("_load_decode_model"))
     assert "reuse_requested = self._request_phase_instance_reuse()" in src
-    assert "self._max_decode_rank_bsz() if reuse_requested else max_num_seq" in src
+    assert "self._max_decode_rank_bsz() if reuse_requested or self._r1_phase_model_reuse_active() else max_num_seq" in src
     assert "padding_bsz=padding_bsz" in src
     assert "self._decode_padding_bsz = padding_bsz" in src
 

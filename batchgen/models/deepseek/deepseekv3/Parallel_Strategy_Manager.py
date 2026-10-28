@@ -2,6 +2,7 @@ from .modeling_deepseek_v3 import (
 	DeepseekV3ForCausalLM
 )
 from .wrappers import DeepSeekExpertWrapper, DeepSeekAttnWrapper as Attn_Wrapper
+from . import r1_phase_reuse
 import logging
 from batchgen.quantization.fp8e4m3 import deepseek_v3_dequantization
 import types
@@ -132,6 +133,15 @@ class DeepseekV3ParallelStrategyManager:
 			Configure a model skeletion for prefill pure dp
 			and the corresponding weight copy task.
 		"""
+		if r1_phase_reuse.enabled_for(self):
+			if not self.r1_phase_model_available():
+				# Build one decode-capable skeleton even when the first request
+				# is prefill. Its native banks/LL pool are then reused forever.
+				self.configure_decoding(
+					padding_bsz=int(os.environ.get("BATCHGEN_MAX_RANK_BSZ", "128")),
+					comm=getattr(self, "_r1_phase_comm", None),
+				)
+			return self._activate_r1_phase_model("prefill")
 		if self.prefill_uses_resident_ep():
 			return self._configure_r1_resident_prefill()
 		import time
@@ -267,6 +277,64 @@ class DeepseekV3ParallelStrategyManager:
 	def _r1_native_moe(self):
 		from .resident_prefill import moe_backend
 		return moe_backend() == "deep_gemm"
+
+	def set_comm(self, comm):
+		"""Remember the worker communicator before the first resident prefill."""
+		self._r1_phase_comm = comm
+
+	def r1_phase_model_available(self):
+		if not r1_phase_reuse.enabled_for(self):
+			return False
+		state = getattr(self, "_r1_shared_phase_state", None)
+		if state is None:
+			return False
+		if state.model is None or self.model is not state.model:
+			raise RuntimeError("R1 single phase model ownership changed without release")
+		return True
+
+	def _cache_r1_phase_model(self):
+		from .resident_prefill import R1NormalPrefillExchange, R1ResidentPrefillAdapter, resident_moe_forward
+		if getattr(self, "_r1_shared_phase_state", None) is not None:
+			raise RuntimeError("Do not allocate a second R1 phase model")
+		exchange = getattr(self, "_r1_prefill_normal_exchange", None)
+		if exchange is None:
+			exchange = self._r1_prefill_normal_exchange = R1NormalPrefillExchange(dist.group.WORLD)
+		for i in range(self.loaded_model_config.first_k_dense_replace, len(self.model.model.layers)):
+			moe = self.model.model.layers[i].mlp
+			moe._r1_resident_prefill_adapter = R1ResidentPrefillAdapter(
+				moe, exchange, self.get_r1_deepgemm_expert_math(i), layer_idx=i)
+		self._r1_phase_model_builds = getattr(self, "_r1_phase_model_builds", 0) + 1
+		self._r1_shared_phase_state = r1_phase_reuse.R1SharedPhaseState(
+			self.model, first_moe_layer=self.loaded_model_config.first_k_dense_replace,
+			capacity=self._r1_deepep_pool.capacity, generation=self._r1_phase_model_builds,
+			prefill_impl=resident_moe_forward)
+		self._r1_shared_phase_state.activate("decode")
+
+	def _activate_r1_phase_model(self, phase, *, padding_bsz=None):
+		state = self._r1_shared_phase_state
+		if phase == "decode" and state.phase != "decode":
+			self._r1_deepep_pool.begin_phase()
+		self.model = state.activate(phase, requested_rows=padding_bsz)
+		self.loaded_model_config.phase = phase
+		self._r1_prefill_configuring = False
+		self._r1_prefill_phase_active = phase == "prefill"
+		self.weight_copy_task = {"attn": [], "routed_expert": [], "shared_expert": []}
+		bank = self.model.model.layers[0].self_attn.module._r1_native_gemm_weights
+		logging.info("[R1-PHASE-REUSE] rank=%d phase=%s model_builds=%d generation=%d "
+		             "single_model=true ordinary_reprepare=false fixed_capacity=%d "
+		             "model_id=%d ordinary_bank0_ptr=%d",
+		             self.rank, phase, self._r1_phase_model_builds, state.generation, state.capacity,
+		             id(self.model), bank[0].weight.data_ptr())
+		return self.model, self.weight_copy_task
+
+	def release_r1_phase_model(self):
+		"""Explicit teardown; normal phase switches deliberately do not call it."""
+		state = getattr(self, "_r1_shared_phase_state", None)
+		if state is not None:
+			if getattr(self, "model", None) is state.model:
+				self.model = None
+			state.release()
+			self._r1_shared_phase_state = None
 
 	def default_prefill_moe_mode(self):
 		from .resident_prefill import resident_prefill_requested
@@ -446,6 +514,10 @@ class DeepseekV3ParallelStrategyManager:
 		- persistent=True: weights pre-loaded on GPU
 		- persistent=False: weights loaded from buffer each forward
 		"""
+		if comm is not None:
+			self.set_comm(comm)
+		if r1_phase_reuse.enabled_for(self) and self.r1_phase_model_available():
+			return self._activate_r1_phase_model("decode", padding_bsz=padding_bsz)
 		self._r1_prefill_configuring = False
 		self._r1_prefill_phase_active = False
 		# Phase/model rebuild is outside the timed decode loop. Drain work
@@ -646,6 +718,8 @@ class DeepseekV3ParallelStrategyManager:
 		if os.environ.get("R1_FULL_MODEL_TRACE", "0") == "1":
 			from scripts.r1_reproduction.r1_full_model_trace import register_model_hooks
 			register_model_hooks(self.model, self.rank, self.world_size, "decode")
+		if r1_phase_reuse.enabled_for(self):
+			self._cache_r1_phase_model()
 		return self.model, self.weight_copy_task
 
 	def _init_r1_deepep(self):
