@@ -3,6 +3,7 @@ serialize tokenizer execution across ranks for very large admissions."""
 
 import ast
 import logging
+import os
 import pickle
 import types
 import weakref
@@ -60,6 +61,7 @@ def _load_tokenize_method():
             "ctypes": types.SimpleNamespace(),
             "dist": types.SimpleNamespace(),
             "logging": logging,
+            "os": os,
             "torch": torch,
         },
     )
@@ -192,6 +194,7 @@ def make_worker(
         ),
         _publish_trajectory_pool_capacity=lambda: None,
         _ensure_buffer_pool=lambda **kwargs: None,
+        _prefill_prefix_pool_enabled=lambda: False,
     )
     uuids = [seq.uuid for seq in sequences]
     return worker, uuids
@@ -512,6 +515,35 @@ def test_tokenizer_lists_are_released_before_broadcast(monkeypatch):
 
     assert raw_refs
     assert alive_at_broadcast == [[False] * len(raw_refs)]
+
+
+@pytest.mark.parametrize("rank", [0, 1, 2, 3])
+def test_explicit_waves_preserve_all_prompt_tokens_and_collective_order(monkeypatch, rank):
+    texts = ["abc", "def", "ghi", "jkl", "mno", "pqr", "stu", "vwx"]
+    worker, uuids = make_worker(texts, rank=rank, world_size=4)
+    monkeypatch.setitem(TOKENIZE_NAMESPACE, "_TOKENIZER_SERIALIZE_CHARS_PER_RANK", 1)
+    monkeypatch.setenv("BATCHGEN_TOKENIZER_PARALLEL_RANKS", "2")
+    monkeypatch.setenv("BATCHGEN_TOKENIZER_PARALLEL_CHAR_BUDGET", "12")
+    waves = [(0, 1), (2, 3)]
+    seen = []
+
+    def gather(out_list, obj):
+        group = waves[len(seen)]
+        assert bool(obj) == (rank in group)
+        if obj:
+            assert_compact_payload(obj)
+        seen.append(group)
+        for source in range(worker.world_size):
+            out_list[source] = strided_payload(texts, source, worker.world_size) if source in group else []
+
+    monkeypatch.setattr(FAKE_DIST, "all_gather_object", gather, raising=False)
+    monkeypatch.setattr(FAKE_DIST, "broadcast_object_list", lambda *_a, **_kw: pytest.fail("unexpected serialized collective"), raising=False)
+    run_tokenize(worker, uuids)
+    assert seen == waves
+    assert len(worker.tokenizer.kwargs_seen) == 1
+    for uuid, text in zip(uuids, texts):
+        slot = worker._trajectory_book.slot_for(uuid)
+        assert worker._trajectory_book.tokens(slot).tolist() == encode(text)
 
 
 def test_release_tokenizer_arenas_trims_the_process_heap(monkeypatch):

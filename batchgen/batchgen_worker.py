@@ -1894,6 +1894,9 @@ class BatchGenWorker:
 		Very large admissions tokenize one rank at a time and broadcast instead,
 		so only one rank per node holds a tokenizer host-memory peak at a time.
 		"""
+		from batchgen.tokenization_policy import admission_tokenization_plan
+		import time as _tokenize_clock
+		_tokenize_started = _tokenize_clock.perf_counter()
 		sequences = [self.global_batch.get_sequence(u) for u in uuids]
 		all_texts = [seq.text for seq in sequences]
 		num_new = len(all_texts)
@@ -1940,21 +1943,28 @@ class BatchGenWorker:
 		# Phase 1: tokenize across ranks. all_texts is identical on every rank,
 		# so this gate picks the same path everywhere without an extra collective.
 		total_chars = sum(len(text) for text in all_texts)
-		max_rank_chars = max(
-			(
-				sum(len(all_texts[i]) for i in range(rank, num_new, self.world_size))
-				for rank in range(min(self.world_size, num_new))
-			),
-			default=0,
+		chars_by_rank = tuple(
+			sum(len(all_texts[i]) for i in range(rank, num_new, self.world_size))
+			for rank in range(min(self.world_size, num_new))
+		)
+		max_rank_chars = max(chars_by_rank, default=0)
+		plan = admission_tokenization_plan(
+			chars_by_rank, legacy_threshold=_TOKENIZER_SERIALIZE_CHARS_PER_RANK
 		)
 		tokenized_by_idx = {}
 
-		if max_rank_chars >= _TOKENIZER_SERIALIZE_CHARS_PER_RANK:
+		if self.rank == 0:
+			logging.info(
+				"[ADMIT] Tokenizer policy: groups=%s char_budget=%s rank_limit=%d explicit=%s",
+				plan.groups, plan.character_budget, plan.rank_limit, plan.explicit,
+			)
+		if (plan.groups and all(len(group) == 1 for group in plan.groups)
+			and (plan.explicit or max_rank_chars >= _TOKENIZER_SERIALIZE_CHARS_PER_RANK)):
 			if self.rank == 0:
 				logging.info(
 					f"[ADMIT] Serialized tokenization: {num_new} sequences, "
 					f"{total_chars} total prompt chars, max rank assignment "
-					f"{max_rank_chars} >= {_TOKENIZER_SERIALIZE_CHARS_PER_RANK}"
+					f"{max_rank_chars}, legacy threshold {_TOKENIZER_SERIALIZE_CHARS_PER_RANK}"
 				)
 			# Ranks at or above num_new own no strided index, so stop there.
 			for source in range(min(self.world_size, num_new)):
@@ -1973,19 +1983,22 @@ class BatchGenWorker:
 					tokenized_by_idx[item["idx"]] = item
 				del payload
 		else:
-			my_tokenized = tokenize_indices(
-				list(range(self.rank, num_new, self.world_size))
-			)
-
-			# Phase 1.5: Gather across ranks
-			all_tokenized_lists = [None] * self.world_size
-			dist.all_gather_object(all_tokenized_lists, my_tokenized)
-
-			for rank_results in all_tokenized_lists:
-				if rank_results:
-					for item in rank_results:
-						tokenized_by_idx[item["idx"]] = item
-			del all_tokenized_lists
+			for group in plan.groups:
+				my_tokenized = tokenize_indices(
+					list(range(self.rank, num_new, self.world_size))
+				) if self.rank in group else []
+				# Each wave releases boxed tokenizer lists before the collective;
+				# all ranks use the same wave order, including inactive ranks.
+				all_tokenized_lists = [None] * self.world_size
+				dist.all_gather_object(all_tokenized_lists, my_tokenized)
+				for rank_results in all_tokenized_lists:
+					if rank_results:
+						for item in rank_results:
+							tokenized_by_idx[item["idx"]] = item
+				del all_tokenized_lists, my_tokenized
+		if self.rank == 0:
+			logging.info("[ADMIT] Tokenize+collect seconds=%.6f sequences=%d groups=%d",
+				_tokenize_clock.perf_counter() - _tokenize_started, num_new, len(plan.groups))
 
 		# Phase 2.5: Reject sequences exceeding context length
 		rejected_uuids = []
