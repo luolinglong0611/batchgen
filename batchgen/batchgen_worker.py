@@ -223,6 +223,10 @@ from batchgen.worker.boundary import (
 	BoundaryHandler,
 	BoundarySeqMeta,
 )
+from batchgen.worker.r1_page_rotation import (
+	balance_gpu_working_set,
+	rotation_quantum,
+)
 from batchgen.worker.decode import (
 	DecodeBatchRequest,
 	DecodeCandidate,
@@ -10975,11 +10979,20 @@ class BatchGenWorker:
 			# and the -1 sentinel is a readable "unknown" in the line.
 			pass
 		gpu_kv = getattr(self, "gpu_paged_kv_cache_manager", None)
+		# The explicitly selected native R1 backend owns one shared expert
+		# bank across phase models. Name that holder rather than treating its
+		# intentional residency as a leak or clearing it in deep_free_model.
+		r1_native_backend = os.environ.get("BATCHGEN_R1_MOE_BACKEND", "legacy")
+		r1_native_banks = getattr(pm, "_r1_deepgemm_math_by_layer", None) or {}
+		r1_native_bank_layers = len(r1_native_banks)
+		r1_native_bank_bytes = sum(int(bank.resident_bytes) for bank in r1_native_banks.values())
 		logging.info(
 			"[PHASE_MEM] rank=%d stage=%s switch=%d driver_used=%.2f "
 			"driver_total=%.2f torch_alloc=%.2f torch_reserved=%.2f "
 			"model=%d pm_model=%d resident_ep=%d sp8_buffer=%d decode_graph=%d "
-			"kv_pool_mapped=%s kda_slots=%d kda_live=%d",
+			"kv_pool_mapped=%s kda_slots=%d kda_live=%d "
+			"r1_native_backend=%s r1_native_bank_layers=%d r1_native_bank_bytes=%d "
+			"r1_unexpected_native_bank=%s",
 			self.rank,
 			label,
 			getattr(self, "_phase_mem_switch_index", 0),
@@ -10995,6 +11008,10 @@ class BatchGenWorker:
 			getattr(gpu_kv, "pool_is_mapped", "na"),
 			kda_slots,
 			kda_live,
+			r1_native_backend,
+			r1_native_bank_layers,
+			r1_native_bank_bytes,
+			bool(r1_native_bank_layers and r1_native_backend != "deep_gemm"),
 		)
 
 	def _log_phase_switch(self, phase: str) -> None:
@@ -15523,12 +15540,18 @@ class BatchGenWorker:
 		input dicts and the broadcast/execution of the result stay on the
 		worker (in ``_page_boundary_fast``).
 		"""
-		return BoundaryHandler.compute_decisions(
-			self._make_boundary_decision_request(
-				decode_uuids, global_seq_state, global_candidate_info,
-				per_rank_free, per_rank_total, chunk_size, per_node_host_stats,
-			)
+		request = self._make_boundary_decision_request(
+			decode_uuids, global_seq_state, global_candidate_info,
+			per_rank_free, per_rank_total, chunk_size, per_node_host_stats,
 		)
+		original = BoundaryHandler.compute_decisions(request)
+		decision, summary = balance_gpu_working_set(
+			request, original,
+			quantum_tokens=getattr(self, "_r1_page_rotation_quantum", 0),
+		)
+		if summary is not None:
+			logging.info("[R1_PAGE_ROTATION_PLAN] %s", json.dumps(summary, sort_keys=True))
+		return decision
 
 	def _page_boundary_fast(
 		self,
@@ -15634,6 +15657,22 @@ class BatchGenWorker:
 		t0 = time.perf_counter()
 		
 		local_payload_error = None
+		page_rotation_tokens = 0
+		try:
+			page_rotation_tokens = rotation_quantum(os.environ, page_size=self.PAGE_SIZE)
+			if page_rotation_tokens and (
+				self.huggingface_ckpt_name != "deepseek-ai/DeepSeek-R1"
+				or self.world_size != 8 or self.local_world_size != 8
+				or self._decode_attn_tp_size() != 1
+				or self.enable_prefix_cache
+				or os.environ.get("BATCHGEN_DEEPSEEK_SINGLE_NODE_RESIDENT_EP") != "1"
+			):
+				raise ValueError(
+					"R1 page rotation requires the single-node resident EP8, "
+					"DP-attention, prefix-cache-off profile"
+				)
+		except Exception as exc:
+			local_payload_error = f"R1 page-rotation policy: {type(exc).__name__}: {exc}"
 		try:
 			if gpu_manager is not None and gpu_manager.is_initialized:
 				gpu_stats = gpu_manager.get_stats()
@@ -15780,6 +15819,7 @@ class BatchGenWorker:
 			'error': local_payload_error,
 			'seq_state': local_seq_state,
 			'candidate_state': local_candidate_state,
+			'r1_page_rotation_tokens': page_rotation_tokens,
 		}
 		
 		all_payloads = [None] * self.world_size
@@ -15794,6 +15834,10 @@ class BatchGenWorker:
 				"[SCHED_INVARIANT] boundary payload validation failed: "
 				+ " | ".join(payload_errors)
 			)
+		rotation_policies = {p.get('r1_page_rotation_tokens', 0) for p in all_payloads}
+		if len(rotation_policies) != 1:
+			raise RuntimeError("[SCHED_INVARIANT] R1 page-rotation policy differs across ranks")
+		self._r1_page_rotation_quantum = page_rotation_tokens
 		validate_boundary_payload_alignment(
 			decode_uuids, all_payloads, group_size=self._decode_attn_tp_size()
 		)
@@ -16306,7 +16350,7 @@ class BatchGenWorker:
 		# Calculate completed count BEFORE early return to ensure final iteration reports correctly
 		timing.total_completed_cumulative = len(self.global_batch.get_sequences_by_status(SequenceStatus.COMPLETED))
 
-		if not decode_uuids:
+		if not decode_uuids and not (page_rotation_tokens and decisions.new_load_uuids):
 			timing.total_ms = (time.perf_counter() - boundary_start) * 1000
 			return decode_uuids, batch, None, [], [], [], timing, False
 
@@ -16541,6 +16585,49 @@ class BatchGenWorker:
 					timing.load_launch_ms = (time.perf_counter() - t_launch) * 1000
 		
 		timing.num_loaded = len(new_load_uuids)
+
+		if page_rotation_tokens and new_load_uuids:
+			# A rotated-in row must participate immediately after this safe
+			# boundary. Leaving it pending until the next page would reserve
+			# GPU pages without contributing any useful MoE rows for64 steps.
+			# Phase0 already drained the outgoing rows' Host appends; this
+			# waits for every incoming H2D before changing its status to active.
+			t_ready = time.perf_counter()
+			load_error = None
+			try:
+				if new_async_task is not None:
+					new_async_task.wait()
+					torch.cuda.synchronize(self.torch_device)
+			except Exception as exc:
+				load_error = f"rank {self.rank} rotated H2D: {type(exc).__name__}: {exc}"
+			load_errors = [None] * self.world_size
+			dist.all_gather_object(load_errors, load_error)
+			if any(load_errors):
+				raise RuntimeError(f"[SCHED_INVARIANT] R1 rotated H2D failed: {load_errors}")
+			timing.wait_async_load_ms += (time.perf_counter() - t_ready) * 1000
+			t_finalize = time.perf_counter()
+			finalize_error = None
+			try:
+				decode_uuids, batch = self._finalize_async_load_minimal(
+					new_async_task, new_load_uuids, new_load_local, new_load_global,
+					decode_uuids, batch, gpu_manager,
+				)
+			except Exception as exc:
+				finalize_error = f"rank {self.rank} rotated finalize: {type(exc).__name__}: {exc}"
+			finalize_errors = [None] * self.world_size
+			dist.all_gather_object(finalize_errors, finalize_error)
+			if any(finalize_errors):
+				raise RuntimeError(f"[SCHED_INVARIANT] R1 rotated finalize failed: {finalize_errors}")
+			timing.finalize_load_ms += (time.perf_counter() - t_finalize) * 1000
+			if self.rank == 0:
+				logging.info(
+					"[R1_PAGE_ROTATION_READY] loaded=%d H2D_wait_ms=%.3f "
+					"finalize_ms=%.3f actual_global_rows=%d Host_state_preserved=true",
+					len(new_load_uuids), timing.wait_async_load_ms,
+					timing.finalize_load_ms, len(decode_uuids),
+				)
+			new_async_task, new_load_uuids = None, []
+			new_load_local, new_load_global = [], []
 		
 		# ========== FINAL PAGE TABLE REBUILD ==========
 		t0 = time.perf_counter()
