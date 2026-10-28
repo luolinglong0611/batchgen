@@ -1,0 +1,2 @@
+# Unified patches contain a single space on empty context lines; preserve pins.
+r1_fp8_megamoe_v0522.patch -whitespace

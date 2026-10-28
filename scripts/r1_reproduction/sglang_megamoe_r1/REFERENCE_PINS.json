@@ -1,0 +1,6 @@
+{
+  "reference/c1_fp8_utils.actual.py": "58b328cd340591eeca404a24a223030c32548f576b285e06c41b768f8dd1b382",
+  "reference/fi_host_utils.upstream.py": "23f957d93afde708d05e90329bd943e2f565795d4fee3c974afdc6d4c3039e69",
+  "reference/fi_runner_common.upstream.py": "8b2d2a874f6bee2222fa9a1bdef6719c9250a06da56f90bc9afb40af3b8eec6a",
+  "fused_moe_layer.upstream.py": "9f892344e2f24360a755e6027e3a0022fc954f3a6961ed9cc80f9fe32ed77931"
+}

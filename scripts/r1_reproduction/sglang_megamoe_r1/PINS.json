@@ -1,0 +1,24 @@
+{
+  "schema": "r1_fp8_megamoe_routed_bridge_v1",
+  "upstream_commit": "baa9befa381511cd4d56f83980951e5a45fffc6d",
+  "upstream_tag": "v0.5.22",
+  "files": [
+    {
+      "path": "python/sglang/srt/layers/quantization/fp8.py",
+      "base_sha256": "2ad20c0d7d399d597230bf32aa85c7d470fb96f5c3ca32c498179292c2e6595c",
+      "candidate_sha256": "b9675a5000d1c618ab54b99d9701762688058b38ef03b1926d0666676088b3d4"
+    },
+    {
+      "path": "python/sglang/srt/arg_groups/moe_hook.py",
+      "base_sha256": "010d32d604f97504acdaa740ad7acb7695efbcc52decc1b15a8778064b6096da",
+      "candidate_sha256": "8d79dee1fbda3885c745b3ff1dd67c22f97af6dbf2cac1ebed3c41f18c11db7c"
+    },
+    {
+      "path": "python/sglang/srt/r1_fp8_megamoe_bridge.py",
+      "base_sha256": null,
+      "candidate_sha256": "ca4d9a5aa1d4d381e6457c6af671dc40a72873ef3da995f51b6453e058c8caef"
+    }
+  ],
+  "patch_sha256": "0ecd2e7361181be8c7810f3636a594839e13c50d22be9aa42c4dc9fc1725c5ab",
+  "status": "CPU_candidate_NOT_GPU_qualified"
+}

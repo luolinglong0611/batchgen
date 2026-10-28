@@ -1,0 +1,28 @@
+{
+  "schema": "exported-SG-R1-MegaMoE-adapter-validation-v1",
+  "deployed_source_bytes_match_pins": true,
+  "cpu_command": "python -m pytest -q test_bridge_cpu.py",
+  "cpu_result": "10 passed in 0.96s",
+  "gpu_operator_and_three_graph_replays_passed": true,
+  "native_prepared_returned_captured_layer_rank_pairs": [
+    464,
+    464,
+    464
+  ],
+  "hot_task": {
+    "requests": 1440,
+    "input_tokens_each": 8192,
+    "output_tokens_each": 2048,
+    "success": 1440,
+    "errors": 0,
+    "output_tps": 7474.29345718329,
+    "BCT_seconds": 394.568398591
+  },
+  "baseline_output_tps": 6497.821176609591,
+  "throughput_gain_percent": 15.027687805394475,
+  "whole_model_precision_alignment_claimed": false,
+  "isolated_MegaMoE_only_speedup_claimed": false,
+  "report": "reports/r1-single8-20261028/sg-megamoe/README.md",
+  "candidate_receipt_sha256": "c982bfe91df2c88a9bd852a38095f4e87b3316acb9e30a49d6429fd81bda30da",
+  "qualification_supersedes_predeployment_status_text_without_rewriting_original_pins": true
+}

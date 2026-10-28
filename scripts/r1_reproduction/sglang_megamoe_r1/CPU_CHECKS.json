@@ -1,0 +1,20 @@
+{
+  "schema": "r1_fp8_bridge_cpu_checks_v1",
+  "executed": true,
+  "GPU_executed": false,
+  "python": "/Users/lilele/.codex/worktrees/r1-main-validation/batchgen/.repro-private/r1-cpu-env-20261028/bin/python",
+  "command": "python -m pytest -q test_bridge_cpu.py",
+  "actual_terminal_result": "10 passed in 0.85s",
+  "stdlib_plan_and_all_AST_parse": "passed",
+  "temporary_overlay_actual_checks": {
+    "unknown_target_preflight_rejected_without_mutation": true,
+    "exact_base_to_candidate": true,
+    "repeat_exact_candidate_idempotent": true
+  },
+  "not_claimed": [
+    "GPU compatibility",
+    "whole-model accuracy",
+    "TPS comparison",
+    "58-layer workspace runtime reuse"
+  ]
+}
