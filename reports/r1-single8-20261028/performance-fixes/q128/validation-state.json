@@ -1,0 +1,39 @@
+{
+  "status": "two_N32_batches_complete_NEEDS_trace_analysis",
+  "owner_pid": 743805,
+  "started_unix": 1793151451.8113503,
+  "rotation": 128,
+  "run": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q128-20261028-v1",
+  "server_pid": 743816,
+  "server_start_ticks": 4508828,
+  "ready_unix": 1793151637.8948646,
+  "cold": {
+    "BCT_seconds": 106.721884604,
+    "counts": {
+      "requests": 32,
+      "successful": 32,
+      "errors": 0,
+      "prompt_tokens": 6144,
+      "completion_tokens": 8192
+    },
+    "receipt_sha256": "dacf23ddce0e6a34547e31ead64ab9d5d6550abd82ed9d6d671dd2d4aaf90f58"
+  },
+  "hot": {
+    "BCT_seconds": 74.067124778,
+    "counts": {
+      "requests": 32,
+      "successful": 32,
+      "errors": 0,
+      "prompt_tokens": 6144,
+      "completion_tokens": 8192
+    },
+    "receipt_sha256": "fe08cce7c859890bd0fddad9e4f1f8b4d6cd57d6b2072169dcf303917cf9e138"
+  },
+  "finished_measurement_unix": 1793151827.9273956,
+  "cleanup_started_unix": 1793151827.927486,
+  "cleanup_finished_unix": 1793151884.9534585,
+  "server_returncode": 0,
+  "forced_cleanup": false,
+  "remaining_session_processes": {},
+  "cleanup_complete": true
+}

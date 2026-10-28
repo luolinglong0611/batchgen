@@ -1,0 +1,38 @@
+{
+  "schema": "R1-SM103-performance-fixes-code-freeze-v1",
+  "code_commit": "c0ef57e0e6c4b2b86c7192af04ad162c869aca2e",
+  "base_commit": "39ba5dfa877051fc7db87fd23b376e1c431ab1b3",
+  "expected_tag": "r1-sm103-perf-fixes-20261028",
+  "functional_commits": [
+    "714a808289b4dc359b52f4904ded37de47873650 feat(r1): add decode CUDA graphs and DeepEP LL",
+    "a69ae4049efd5910fac5c8c0b71e94e8ba125cfe fix(deepep): preserve SM103 LL transport compatibility",
+    "112c7d305591b45f59792e025b8003d53473ab59 feat(r1): share native FP8 experts across inference phases",
+    "c0ef57e0e6c4b2b86c7192af04ad162c869aca2e perf(r1): rebalance page-boundary GPU working sets"
+  ],
+  "qualified_runtime_source_manifest_sha256": "97bc3a48434e4f741561af3a24ed062c44cd5cad793107d380eeddf14f895189",
+  "current_code_matches_qualified_overlays": true,
+  "source_overlays": {
+    "batchgen/batchgen_worker.py": "0ce457ce5bfb566493c6c26a5f3d3dab7aaab3228d21f253eec741af78a1c2e6",
+    "batchgen/models/deepseek/deepseekv3/Parallel_Strategy_Manager.py": "2e0777467d75227547a38ed7dd21434c0a0b34677226d052f8330e50f1280564",
+    "batchgen/models/deepseek/deepseekv3/planner.py": "5db5519d2f7cf7d301c42ba097b61e9a5367ae302dc10463e561b73dfd5e9425",
+    "batchgen/models/deepseek/deepseekv3/deepgemm_moe.py": "d95c70ea35d7bbef5b5e8134f82b60e4c64cfbc3c2e7c9de2b7272b968cae6f2",
+    "batchgen/models/deepseek/deepseekv3/resident_prefill.py": "65b95586cc38680aabd7df44ada1a71c539451c8c975bb72b8a58ae5eb0c5aa9",
+    "batchgen/worker/r1_page_rotation.py": "94f3ae5de5f40e6587b6e49948e6609852461df053aa55bc3777110b4a61fccf",
+    "batchgen/attention/mla/r1_whole_decode_cuda_graph.py": "686b4dbf0df7e340af26d91ad99544392ade5400f23d30327467e3f9001c503e"
+  },
+  "freeze_CPU_recheck": {
+    "core_model_graph_scheduler": {
+      "passed": 82,
+      "failed": 0,
+      "wall_seconds": 1.53
+    },
+    "official_DeepEP_API_availability": {
+      "passed": 12,
+      "failed": 0,
+      "wall_seconds": 0.79,
+      "isolation": "namespace package for CPU module unit tests; skips unrelated batchgen package native bootstrap, not the actual tested module"
+    }
+  },
+  "GPU_evidence": "Existing full model and operator evidence in this folder; Git solidification changes no executed model code",
+  "scope": "Keep BatchGen frozen while SGLang MegaMoE is evaluated. No original6000 campaign resumed."
+}

@@ -1,0 +1,261 @@
+{
+  "schema": "r1-single8-offline-measurement-v1-receipt",
+  "status": "completed_diagnostic_NOT_formal_performance",
+  "run_id": "r1-perf-fix-short-q128-20261028-v1-cold",
+  "backend": "batchgen",
+  "profile": "mechanism32-192to256",
+  "workload_kind": "mechanism32",
+  "count": 32,
+  "input_tokens_each": 192,
+  "output_tokens_each": 256,
+  "repetitions": 1,
+  "source_root": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1",
+  "bindings": [
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q128-20261028-v1/cold.config.json",
+      "sha256": "d0bb68324160ff134875befcee0b3bd83d6fbd7aacc3bc77d8364e4fdfbf4af0"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q128-20261028-v1/configuration.json",
+      "sha256": "7cc0f9f9b2c917cf872b4bac68669fd64c4ec5752eac84523d7a8215c5b308b6"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/workload-mechanism32-20261028/manifest.json",
+      "sha256": "8405a5146c59302c63fc21bc38c71a8013ebd1a4a43cb12099a9e05fd77fbf56"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/attention/mla/r1_decode_cuda_graph.py",
+      "sha256": "1281c676008980bc2f4bcaa3365d020262d1e8fc8105140662824e4fdc618fb2"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/attention/mla/r1_whole_decode_cuda_graph.py",
+      "sha256": "686b4dbf0df7e340af26d91ad99544392ade5400f23d30327467e3f9001c503e"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/batchgen_worker.py",
+      "sha256": "0ce457ce5bfb566493c6c26a5f3d3dab7aaab3228d21f253eec741af78a1c2e6"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/continuous_batching.py",
+      "sha256": "3fe41a7885442a29a215a52bbacb72621e7909b786ae09b91314150254d7fb4c"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/kv_cache/gpu_paged_kv_manager.py",
+      "sha256": "847dee390a609ee124b8b537a60c144897cbdcedd73a978986bbf281572f11d1"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/launch_http_server.py",
+      "sha256": "3aa379d08b8479440497a104ef8135f112e2e0ecede6e2142a0c8a3146e93e00"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/models/deepseek/deepseekv3/Parallel_Strategy_Manager.py",
+      "sha256": "2e0777467d75227547a38ed7dd21434c0a0b34677226d052f8330e50f1280564"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/models/deepseek/deepseekv3/deepep_decode.py",
+      "sha256": "bb3ba3b5ee9abbd145531ee463d3948168b7ac739c2e39040f681fcf8187da50"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/models/deepseek/deepseekv3/deepgemm_moe.py",
+      "sha256": "d95c70ea35d7bbef5b5e8134f82b60e4c64cfbc3c2e7c9de2b7272b968cae6f2"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/models/deepseek/deepseekv3/modeling_deepseek_v3.py",
+      "sha256": "4e9d038401ef423421a55efd534229a4d7ab4d174d7407afda39435e2496beec"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/models/deepseek/deepseekv3/planner.py",
+      "sha256": "5db5519d2f7cf7d301c42ba097b61e9a5367ae302dc10463e561b73dfd5e9425"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/models/deepseek/deepseekv3/resident_prefill.py",
+      "sha256": "65b95586cc38680aabd7df44ada1a71c539451c8c975bb72b8a58ae5eb0c5aa9"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/models/deepseek/deepseekv3/wrappers.py",
+      "sha256": "0c791da183a4805cddd6ace377704392c87ac4dac2e735ca1002335e18c4b526"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/models/wrappers/attention.py",
+      "sha256": "81c26a3f4e8a697a13f41e38d18c2e5e71beeff7a7b82d975e8fe0db3a0e9bcd"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/moe/deepep_ll.py",
+      "sha256": "96c1545d2731eaaf34ee3a68172b689dd15272d20b8df58377545dad5a8856e9"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/runtime_preflight.py",
+      "sha256": "64404c36ef52e65845277fda93d7dcb0680bc6e25250837534f7f6745439c3b1"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/sequence.py",
+      "sha256": "9b30a6c0bca9d0b17064c8897dffaab295a316b0499a9fa7e8dcea191cf71909"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/server/batch_scheduler.py",
+      "sha256": "7a8eb4b3bf643e9852fc5d27d95e5f6c8810199b68ee95bf5a646dc389e1a4bf"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/server/http_server.py",
+      "sha256": "5b47295f5dc1fdf8832fc4a57a9e9372b21e9679c71fca05838fb83d8818dabe"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/server/io_struct.py",
+      "sha256": "d2c7344698dded400262fcfe99221d97cd48b91f6879f948f4753280ff272b4b"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/server/server_args.py",
+      "sha256": "fee0b42bf3484f0b8c9888c661620e922472840fb4f29c58cd9b54bb5cda04ec"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/server/worker_manager.py",
+      "sha256": "649094fc610b8c535b0978a7a18f24206211ab117de74484aec78f8134384077"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/worker/boundary.py",
+      "sha256": "fe16bb062432cd24b41178ddde945f818c952a69bf5723f8afb5a23279ad8884"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/worker/decode.py",
+      "sha256": "6f20e528cab9575c92eb54bee47233a65f4a663a4a86c00bd76a0c977f3db43e"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/worker/prefill.py",
+      "sha256": "3c640605f8dbae262c01a7ee570f16f77e6b0d038ce680876fc8e58683445bed"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/worker/r1_page_rotation.py",
+      "sha256": "94f3ae5de5f40e6587b6e49948e6609852461df053aa55bc3777110b4a61fccf"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/workload-mechanism32-20261028/mechanism32-192to256.requests.jsonl",
+      "sha256": "5e616bbc7f7d7c38647daecf2c458418c8a17273977719cab8b786b62ac91199"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/workload-mechanism32-20261028/mechanism32-192to256.native-inputs.jsonl",
+      "sha256": "cb591417dd5a9cdb6f0a242cdf3b8d887caa8d62b0c6634458cd4e7d36329bae"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/core_engine.cpython-311-x86_64-linux-gnu.so",
+      "sha256": "a75ff9de08ded5b90fbfd036cd25c5238f1f405fd2c13d4d9350ef618113d235"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen_kernels/common/_C_mgn_ops.cpython-311-x86_64-linux-gnu.so",
+      "sha256": "4ec38e8db4ebb7025ea9805bd7f753577302612c80eb0eafc24d3e875b35748a"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen_kernels/moe/_C_fused_moe_token_permutation.cpython-311-x86_64-linux-gnu.so",
+      "sha256": "4e02f3ec5d1342633c93c47acb57e58ae2856074c5d4777453ed10eeba710795"
+    }
+  ],
+  "service_identity": {
+    "pid": 743816,
+    "start_ticks": 4508828
+  },
+  "gpu_uuid_order": [
+    "GPU-07cbd151-9515-4d54-6d1f-793a11c53495",
+    "GPU-545e850a-15ce-ed57-2cb5-807705df2020",
+    "GPU-9afad03a-df4a-6de9-6d34-272d5d417b15",
+    "GPU-92758bdb-c00b-a84f-62a5-30beca5d38d2",
+    "GPU-58882c6c-2712-c989-c731-7f4f8936ae2e",
+    "GPU-3083e0c8-af7b-44f0-0975-2cb59ca564f1",
+    "GPU-85092c74-e5e2-5789-ca59-22899ac20eff",
+    "GPU-5ff49860-07a1-11b9-0591-bb2b58023f18"
+  ],
+  "generation_policy": {
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "top_k": 1,
+    "repetition_penalty": 1.0,
+    "frequency_penalty": 0.0,
+    "presence_penalty": 0.0,
+    "ignore_eos": true,
+    "n": 1,
+    "stream": false
+  },
+  "valid_complete_task_result": true,
+  "client_pid": 745570,
+  "client_hostname": "serverless-010064048017.no225",
+  "client_imports_Torch_or_models": false,
+  "precision_status": "not_qualified_user_selected_performance_first",
+  "all_requests_logically_available_together": true,
+  "client_fanout": null,
+  "timing_definition": "Before first measurement HTTP submission, with all local payloads ready, through every successful response byte; file upload/batch create/poll/output download included for BG. Preparation and postflight excluded.",
+  "thermal_state_declared_by_operator": "not_proven_by_this_client",
+  "client_proved_warm_state": false,
+  "server_process_launch_included": false,
+  "first_admission_initialization_or_JIT_may_be_included": true,
+  "timeout_policy": "retain exact batch ID/rids and all partial outputs; no resubmit, cancellation, partial-result throughput or tail extrapolation",
+  "payload_preparation_finished_unix": 1793151640.5686305,
+  "input_identities_sha256": "b5c6bc0fa3a5ca5b654f544bdf391348a2eb17f1db3d87ba3019289edcc15c9a",
+  "client_library": {
+    "aiohttp": "3.13.2",
+    "Python": "3.11.15 (main, Apr 14 2026, 14:28:36) [Clang 22.1.3 ]"
+  },
+  "client_RLIMIT_NOFILE": [
+    655350,
+    655350
+  ],
+  "health_before": {
+    "HTTP_status": 200,
+    "bytes": 20,
+    "body": {
+      "status": "healthy"
+    },
+    "response_sha256": "b808daea0f225957b3cddad9d5e33cb8dd4da1dbfc1d764e291f8d2e9fa4f857"
+  },
+  "logical_availability_t0_ns": 8334386462296568,
+  "all_requests_available_at_t0": 32,
+  "started_unix": 1793151640.5717845,
+  "task_deadline_seconds": 1500.0,
+  "submission_state": "batch_submitted_DO_NOT_resubmit",
+  "input_file_id": "file-1a1f9f9651494a4bac6ddbd35694f192",
+  "batch_id": "batch_11b6585f2937449d92dfc35d",
+  "output_file_id": "file-c3d7031de39241a9adc6640e29935f82",
+  "complete_response_end_ns": 8334493184181172,
+  "validation_end_ns": 8334493185942164,
+  "BCT_submission_to_all_responses_seconds": 106.721884604,
+  "BCT_including_client_output_validation_seconds": 106.723645596,
+  "successful_output_tokens_per_second": 76.76026365536052,
+  "successful_requests_per_second": 0.299844779903752,
+  "counts": {
+    "requests": 32,
+    "successful": 32,
+    "errors": 0,
+    "prompt_tokens": 6144,
+    "completion_tokens": 8192
+  },
+  "service_time": {
+    "created_at": 1793151640,
+    "started_at": 1793151640,
+    "completed_at": 1793151747,
+    "processing_seconds_from_batch_API": 107,
+    "duration_resolution_seconds": 1,
+    "scope": "BG batch API started_at→completed_at; server wall-clock integer timestamps, not per-request GPU time"
+  },
+  "finished_unix": 1793151747.295434,
+  "output_length_exact": true,
+  "valid_formal6000_performance_result": false,
+  "health_after": {
+    "HTTP_status": 200,
+    "bytes": 20,
+    "body": {
+      "status": "healthy"
+    },
+    "response_sha256": "b808daea0f225957b3cddad9d5e33cb8dd4da1dbfc1d764e291f8d2e9fa4f857"
+  },
+  "all_bindings_unchanged_after_measurement": true,
+  "service_log_window": {
+    "path": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q128-20261028-v1/service.log",
+    "device": 231,
+    "inode": 219430420,
+    "start_offset": 160894,
+    "captured_before_submission": true,
+    "available": true,
+    "end_offset": 1775019,
+    "bytes": 1614125,
+    "output_file": "service-window.log",
+    "sha256": "9bdf73d7834d75e9ffd9d2e551d1fce163f57b85639710d62c8741bc7d47b447",
+    "scope": "Exact new log bytes during this client invocation; collection is outside BCT"
+  }
+}

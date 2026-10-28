@@ -1,0 +1,1912 @@
+{
+  "schema": "single8-existing-paged-host-mechanism-analysis-v1",
+  "analyzer_revision": "v2-disjoint-native-wait-windows-per-real-replay",
+  "status": "passed_existing_paged_mechanism_metadata_NOT_bytecheck_or_performance",
+  "criteria": {
+    "all8_worker_rank_traces_present": true,
+    "trace_not_truncated": true,
+    "no_observed_noncontiguous_Host_append_gap": true,
+    "actual_Host_KV_inventory_exceeds_aggregate_GPU_KV_capacity": true,
+    "GPU_physical_page_reused_by_different_unfinished_sequence": true,
+    "successful_H2D_after_hold_with_nonreset_context_and_decode_metadata": true,
+    "attention_slices_merge_into_larger_actual_valid_MoE_rows": true,
+    "all8_final_GPU_and_shared_Host_page_counts_zero": true,
+    "whole_graph_all8_have_real_whole_graph_replays": true,
+    "whole_graph_every_real_replay_has_exact_capture_and_61_or_zero_callback_layers": true,
+    "whole_graph_every_real_replay_Host_append_completed_once_for_all61_layers": true,
+    "whole_graph_all8_two_direct_GPU_diagnostics_each58_LL_pairs_and_one_graph_replay": true
+  },
+  "warnings": [],
+  "source_trace_files": [
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid719190.jsonl",
+      "bytes": 2158,
+      "sha256": "4b80ccd31ba5533ce0346e6a8cd6f8fc844c6646f9420c367216f7eec91a88a8"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid719322.jsonl",
+      "bytes": 580,
+      "sha256": "771d1eb29dc1944e234dc684658a47109401f165d9af7cc5c49d8bf1d1b88bc3"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+      "bytes": 9797143,
+      "sha256": "22a63f02590620566ddf596fd87b5a1ee9006ef81f9cd1b877be12a9c2eca3d6"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720130.jsonl",
+      "bytes": 9797101,
+      "sha256": "dd1efa4a53a3a7867d55031db3bd7ce1ab15bdc77f8e598c4c5d01400215238d"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720131.jsonl",
+      "bytes": 9798402,
+      "sha256": "2e988c6eb417e71b5b1484797b963fc3fc97f35a0f02aff201354eda25575412"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720132.jsonl",
+      "bytes": 9798361,
+      "sha256": "168d48a1aadd12bcfbce60856572f9c0bc935fa59fecbd14b4f01d7e9134c934"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720133.jsonl",
+      "bytes": 9798447,
+      "sha256": "fd510c0cb4f7446b9f6fca171dd6150eddb3a154d8491d8f7335c7537a6b377e"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720134.jsonl",
+      "bytes": 9798454,
+      "sha256": "21b14f97618e894a6ea05657cd4fde27e0ab5b758c3c5241be6c60bf4aef9b2a"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720135.jsonl",
+      "bytes": 9798427,
+      "sha256": "239281cbf2429add86d8d403b0d076a2ffb0927227bf85ef2f76e50afa509e4b"
+    },
+    {
+      "path": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720136.jsonl",
+      "bytes": 9798401,
+      "sha256": "cd38db837cb81fb7212ed2bb53fd435aa800510a1eb08fa0d29171d8a6614e09"
+    }
+  ],
+  "rank_worker_bindings": {
+    "0": {
+      "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+      "line": 6,
+      "ordinal": 5,
+      "pid": 720129
+    },
+    "1": {
+      "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720130.jsonl",
+      "line": 6,
+      "ordinal": 5,
+      "pid": 720130
+    },
+    "2": {
+      "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720131.jsonl",
+      "line": 6,
+      "ordinal": 5,
+      "pid": 720131
+    },
+    "3": {
+      "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720132.jsonl",
+      "line": 6,
+      "ordinal": 5,
+      "pid": 720132
+    },
+    "4": {
+      "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720133.jsonl",
+      "line": 6,
+      "ordinal": 5,
+      "pid": 720133
+    },
+    "5": {
+      "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720134.jsonl",
+      "line": 6,
+      "ordinal": 5,
+      "pid": 720134
+    },
+    "6": {
+      "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720135.jsonl",
+      "line": 6,
+      "ordinal": 5,
+      "pid": 720135
+    },
+    "7": {
+      "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720136.jsonl",
+      "line": 6,
+      "ordinal": 5,
+      "pid": 720136
+    }
+  },
+  "request_ids_observed": 64,
+  "observed_Host_append_gaps": [],
+  "observed_native_copy_wait_completions": 128,
+  "observed_graph_replay_return_count": 0,
+  "graph_replay_evidence": [],
+  "MoE_trace_dispatch_scopes": {
+    "whole_graph_replay_captured_actual_DeepEP_LL_operation_set": 14272
+  },
+  "whole_graph_required": true,
+  "whole_graph_qualification": {
+    "criteria": {
+      "all8_have_real_whole_graph_replays": true,
+      "every_real_replay_has_exact_capture_and_61_or_zero_callback_layers": true,
+      "every_real_replay_Host_append_completed_once_for_all61_layers": true,
+      "all8_two_direct_GPU_diagnostics_each58_LL_pairs_and_one_graph_replay": true
+    },
+    "passed": true,
+    "actual_whole_decode_replays": 14272,
+    "direct_GPU_diagnostic_count_by_rank": {
+      "0": 2,
+      "1": 2,
+      "2": 2,
+      "3": 2,
+      "4": 2,
+      "5": 2,
+      "6": 2,
+      "7": 2
+    },
+    "warmup_and_capture_forward_steps_counted_as_decode": 0,
+    "Host_append_completion_proofs": [
+      {
+        "rank": 0,
+        "record_id": 139413755113488,
+        "replays": 1,
+        "gids": [
+          0,
+          8
+        ],
+        "positions": [
+          192,
+          192
+        ],
+        "replay": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+          "line": 40,
+          "ordinal": 39
+        },
+        "wait_window": {
+          "start_exclusive": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 40,
+            "ordinal": 39
+          },
+          "end_exclusive": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 50,
+            "ordinal": 49
+          },
+          "scope": "this real replay through before next same-rank real replay; EOF for final step"
+        },
+        "native_waits": [
+          {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 47,
+            "ordinal": 46
+          },
+          {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 47,
+            "ordinal": 46
+          }
+        ]
+      },
+      {
+        "rank": 0,
+        "record_id": 139413954621968,
+        "replays": 1,
+        "gids": [
+          0,
+          8
+        ],
+        "positions": [
+          193,
+          193
+        ],
+        "replay": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+          "line": 50,
+          "ordinal": 49
+        },
+        "wait_window": {
+          "start_exclusive": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 50,
+            "ordinal": 49
+          },
+          "end_exclusive": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 59,
+            "ordinal": 58
+          },
+          "scope": "this real replay through before next same-rank real replay; EOF for final step"
+        },
+        "native_waits": [
+          {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 57,
+            "ordinal": 56
+          },
+          {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 57,
+            "ordinal": 56
+          }
+        ]
+      },
+      {
+        "rank": 0,
+        "record_id": 139413954621968,
+        "replays": 2,
+        "gids": [
+          0,
+          8
+        ],
+        "positions": [
+          194,
+          194
+        ],
+        "replay": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+          "line": 59,
+          "ordinal": 58
+        },
+        "wait_window": {
+          "start_exclusive": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 59,
+            "ordinal": 58
+          },
+          "end_exclusive": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 67,
+            "ordinal": 66
+          },
+          "scope": "this real replay through before next same-rank real replay; EOF for final step"
+        },
+        "native_waits": [
+          {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 65,
+            "ordinal": 64
+          },
+          {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 65,
+            "ordinal": 64
+          }
+        ]
+      },
+      {
+        "rank": 0,
+        "record_id": 139413954621968,
+        "replays": 3,
+        "gids": [
+          0,
+          8
+        ],
+        "positions": [
+          195,
+          195
+        ],
+        "replay": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+          "line": 67,
+          "ordinal": 66
+        },
+        "wait_window": {
+          "start_exclusive": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 67,
+            "ordinal": 66
+          },
+          "end_exclusive": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 75,
+            "ordinal": 74
+          },
+          "scope": "this real replay through before next same-rank real replay; EOF for final step"
+        },
+        "native_waits": [
+          {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 73,
+            "ordinal": 72
+          },
+          {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 73,
+            "ordinal": 72
+          }
+        ]
+      },
+      {
+        "rank": 0,
+        "record_id": 139413954621968,
+        "replays": 4,
+        "gids": [
+          0,
+          8
+        ],
+        "positions": [
+          196,
+          196
+        ],
+        "replay": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+          "line": 75,
+          "ordinal": 74
+        },
+        "wait_window": {
+          "start_exclusive": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 75,
+            "ordinal": 74
+          },
+          "end_exclusive": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 83,
+            "ordinal": 82
+          },
+          "scope": "this real replay through before next same-rank real replay; EOF for final step"
+        },
+        "native_waits": [
+          {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 81,
+            "ordinal": 80
+          },
+          {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 81,
+            "ordinal": 80
+          }
+        ]
+      },
+      {
+        "rank": 0,
+        "record_id": 139413954621968,
+        "replays": 5,
+        "gids": [
+          0,
+          8
+        ],
+        "positions": [
+          197,
+          197
+        ],
+        "replay": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+          "line": 83,
+          "ordinal": 82
+        },
+        "wait_window": {
+          "start_exclusive": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 83,
+            "ordinal": 82
+          },
+          "end_exclusive": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 91,
+            "ordinal": 90
+          },
+          "scope": "this real replay through before next same-rank real replay; EOF for final step"
+        },
+        "native_waits": [
+          {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 89,
+            "ordinal": 88
+          },
+          {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 89,
+            "ordinal": 88
+          }
+        ]
+      },
+      {
+        "rank": 0,
+        "record_id": 139413954621968,
+        "replays": 6,
+        "gids": [
+          0,
+          8
+        ],
+        "positions": [
+          198,
+          198
+        ],
+        "replay": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+          "line": 91,
+          "ordinal": 90
+        },
+        "wait_window": {
+          "start_exclusive": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 91,
+            "ordinal": 90
+          },
+          "end_exclusive": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 99,
+            "ordinal": 98
+          },
+          "scope": "this real replay through before next same-rank real replay; EOF for final step"
+        },
+        "native_waits": [
+          {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 97,
+            "ordinal": 96
+          },
+          {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 97,
+            "ordinal": 96
+          }
+        ]
+      },
+      {
+        "rank": 0,
+        "record_id": 139413954621968,
+        "replays": 7,
+        "gids": [
+          0,
+          8
+        ],
+        "positions": [
+          199,
+          199
+        ],
+        "replay": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+          "line": 99,
+          "ordinal": 98
+        },
+        "wait_window": {
+          "start_exclusive": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 99,
+            "ordinal": 98
+          },
+          "end_exclusive": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 107,
+            "ordinal": 106
+          },
+          "scope": "this real replay through before next same-rank real replay; EOF for final step"
+        },
+        "native_waits": [
+          {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 105,
+            "ordinal": 104
+          },
+          {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 105,
+            "ordinal": 104
+          }
+        ]
+      }
+    ],
+    "GPU_LL_counter_delta_proofs": [
+      {
+        "rank": 0,
+        "replays": 1,
+        "actual_routed_layers": 58,
+        "each_dispatch_delta": 1,
+        "each_combine_delta": 1,
+        "graph_replay_device_counter_delta": 1,
+        "valid_local_rows_delta": 2,
+        "diagnostic": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+          "line": 45,
+          "ordinal": 44
+        },
+        "replay": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+          "line": 40,
+          "ordinal": 39
+        },
+        "warmup_and_capture_excluded_by_immediate_before_after_snapshots": true
+      },
+      {
+        "rank": 0,
+        "replays": 1,
+        "actual_routed_layers": 58,
+        "each_dispatch_delta": 1,
+        "each_combine_delta": 1,
+        "graph_replay_device_counter_delta": 1,
+        "valid_local_rows_delta": 2,
+        "diagnostic": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+          "line": 55,
+          "ordinal": 54
+        },
+        "replay": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+          "line": 50,
+          "ordinal": 49
+        },
+        "warmup_and_capture_excluded_by_immediate_before_after_snapshots": true
+      },
+      {
+        "rank": 1,
+        "replays": 1,
+        "actual_routed_layers": 58,
+        "each_dispatch_delta": 1,
+        "each_combine_delta": 1,
+        "graph_replay_device_counter_delta": 1,
+        "valid_local_rows_delta": 2,
+        "diagnostic": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720130.jsonl",
+          "line": 45,
+          "ordinal": 44
+        },
+        "replay": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720130.jsonl",
+          "line": 40,
+          "ordinal": 39
+        },
+        "warmup_and_capture_excluded_by_immediate_before_after_snapshots": true
+      },
+      {
+        "rank": 1,
+        "replays": 1,
+        "actual_routed_layers": 58,
+        "each_dispatch_delta": 1,
+        "each_combine_delta": 1,
+        "graph_replay_device_counter_delta": 1,
+        "valid_local_rows_delta": 2,
+        "diagnostic": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720130.jsonl",
+          "line": 55,
+          "ordinal": 54
+        },
+        "replay": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720130.jsonl",
+          "line": 50,
+          "ordinal": 49
+        },
+        "warmup_and_capture_excluded_by_immediate_before_after_snapshots": true
+      },
+      {
+        "rank": 2,
+        "replays": 1,
+        "actual_routed_layers": 58,
+        "each_dispatch_delta": 1,
+        "each_combine_delta": 1,
+        "graph_replay_device_counter_delta": 1,
+        "valid_local_rows_delta": 2,
+        "diagnostic": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720131.jsonl",
+          "line": 45,
+          "ordinal": 44
+        },
+        "replay": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720131.jsonl",
+          "line": 40,
+          "ordinal": 39
+        },
+        "warmup_and_capture_excluded_by_immediate_before_after_snapshots": true
+      },
+      {
+        "rank": 2,
+        "replays": 1,
+        "actual_routed_layers": 58,
+        "each_dispatch_delta": 1,
+        "each_combine_delta": 1,
+        "graph_replay_device_counter_delta": 1,
+        "valid_local_rows_delta": 2,
+        "diagnostic": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720131.jsonl",
+          "line": 55,
+          "ordinal": 54
+        },
+        "replay": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720131.jsonl",
+          "line": 50,
+          "ordinal": 49
+        },
+        "warmup_and_capture_excluded_by_immediate_before_after_snapshots": true
+      },
+      {
+        "rank": 3,
+        "replays": 1,
+        "actual_routed_layers": 58,
+        "each_dispatch_delta": 1,
+        "each_combine_delta": 1,
+        "graph_replay_device_counter_delta": 1,
+        "valid_local_rows_delta": 2,
+        "diagnostic": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720132.jsonl",
+          "line": 45,
+          "ordinal": 44
+        },
+        "replay": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720132.jsonl",
+          "line": 40,
+          "ordinal": 39
+        },
+        "warmup_and_capture_excluded_by_immediate_before_after_snapshots": true
+      },
+      {
+        "rank": 3,
+        "replays": 1,
+        "actual_routed_layers": 58,
+        "each_dispatch_delta": 1,
+        "each_combine_delta": 1,
+        "graph_replay_device_counter_delta": 1,
+        "valid_local_rows_delta": 2,
+        "diagnostic": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720132.jsonl",
+          "line": 55,
+          "ordinal": 54
+        },
+        "replay": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720132.jsonl",
+          "line": 50,
+          "ordinal": 49
+        },
+        "warmup_and_capture_excluded_by_immediate_before_after_snapshots": true
+      }
+    ],
+    "invalid_evidence": [],
+    "counter_diagnostics_are_synchronous_and_not_performance_samples": true
+  },
+  "max_Host_inventory_ratio_lower_bound": 1.696875,
+  "Host_inventory_proofs": [
+    {
+      "decode_group": 0,
+      "decode_iteration": 64,
+      "Host_confirmed_contiguous_KV_tokens_lower_bound": 7152,
+      "Host_confirmed_prefill_only_tokens_lower_bound": 6144,
+      "aggregate_GPU_KV_capacity_tokens": 5120,
+      "ratio_lower_bound": 1.396875,
+      "rank_proofs": {
+        "0": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+          "line": 547,
+          "ordinal": 546
+        },
+        "1": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720130.jsonl",
+          "line": 547,
+          "ordinal": 546
+        },
+        "2": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720131.jsonl",
+          "line": 547,
+          "ordinal": 546
+        },
+        "3": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720132.jsonl",
+          "line": 547,
+          "ordinal": 546
+        },
+        "4": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720133.jsonl",
+          "line": 547,
+          "ordinal": 546
+        },
+        "5": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720134.jsonl",
+          "line": 547,
+          "ordinal": 546
+        },
+        "6": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720135.jsonl",
+          "line": 547,
+          "ordinal": 546
+        },
+        "7": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720136.jsonl",
+          "line": 547,
+          "ordinal": 546
+        }
+      },
+      "alignment": "same logical collective page boundary; not unrelated per-rank peaks"
+    },
+    {
+      "decode_group": 0,
+      "decode_iteration": 128,
+      "Host_confirmed_contiguous_KV_tokens_lower_bound": 8176,
+      "Host_confirmed_prefill_only_tokens_lower_bound": 6144,
+      "aggregate_GPU_KV_capacity_tokens": 5120,
+      "ratio_lower_bound": 1.596875,
+      "rank_proofs": {
+        "0": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+          "line": 1063,
+          "ordinal": 1062
+        },
+        "1": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720130.jsonl",
+          "line": 1063,
+          "ordinal": 1062
+        },
+        "2": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720131.jsonl",
+          "line": 1063,
+          "ordinal": 1062
+        },
+        "3": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720132.jsonl",
+          "line": 1063,
+          "ordinal": 1062
+        },
+        "4": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720133.jsonl",
+          "line": 1063,
+          "ordinal": 1062
+        },
+        "5": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720134.jsonl",
+          "line": 1063,
+          "ordinal": 1062
+        },
+        "6": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720135.jsonl",
+          "line": 1063,
+          "ordinal": 1062
+        },
+        "7": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720136.jsonl",
+          "line": 1063,
+          "ordinal": 1062
+        }
+      },
+      "alignment": "same logical collective page boundary; not unrelated per-rank peaks"
+    },
+    {
+      "decode_group": 0,
+      "decode_iteration": 192,
+      "Host_confirmed_contiguous_KV_tokens_lower_bound": 8688,
+      "Host_confirmed_prefill_only_tokens_lower_bound": 6144,
+      "aggregate_GPU_KV_capacity_tokens": 5120,
+      "ratio_lower_bound": 1.696875,
+      "rank_proofs": {
+        "0": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+          "line": 1514,
+          "ordinal": 1513
+        },
+        "1": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720130.jsonl",
+          "line": 1514,
+          "ordinal": 1513
+        },
+        "2": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720131.jsonl",
+          "line": 1514,
+          "ordinal": 1513
+        },
+        "3": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720132.jsonl",
+          "line": 1514,
+          "ordinal": 1513
+        },
+        "4": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720133.jsonl",
+          "line": 1514,
+          "ordinal": 1513
+        },
+        "5": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720134.jsonl",
+          "line": 1514,
+          "ordinal": 1513
+        },
+        "6": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720135.jsonl",
+          "line": 1514,
+          "ordinal": 1513
+        },
+        "7": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720136.jsonl",
+          "line": 1514,
+          "ordinal": 1513
+        }
+      },
+      "alignment": "same logical collective page boundary; not unrelated per-rank peaks"
+    },
+    {
+      "decode_group": 0,
+      "decode_iteration": 256,
+      "Host_confirmed_contiguous_KV_tokens_lower_bound": 5624,
+      "Host_confirmed_prefill_only_tokens_lower_bound": 4608,
+      "aggregate_GPU_KV_capacity_tokens": 5120,
+      "ratio_lower_bound": 1.0984375,
+      "rank_proofs": {
+        "0": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+          "line": 1966,
+          "ordinal": 1965
+        },
+        "1": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720130.jsonl",
+          "line": 1966,
+          "ordinal": 1965
+        },
+        "2": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720131.jsonl",
+          "line": 1966,
+          "ordinal": 1965
+        },
+        "3": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720132.jsonl",
+          "line": 1966,
+          "ordinal": 1965
+        },
+        "4": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720133.jsonl",
+          "line": 1966,
+          "ordinal": 1965
+        },
+        "5": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720134.jsonl",
+          "line": 1966,
+          "ordinal": 1965
+        },
+        "6": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720135.jsonl",
+          "line": 1966,
+          "ordinal": 1965
+        },
+        "7": {
+          "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720136.jsonl",
+          "line": 1966,
+          "ordinal": 1965
+        }
+      },
+      "alignment": "same logical collective page boundary; not unrelated per-rank peaks"
+    }
+  ],
+  "GPU_reuse_proofs": [
+    {
+      "rank": 0,
+      "new_gid": 8,
+      "page_id": 0,
+      "previous_gid": 0,
+      "previous_request_id": "mechanism32-0000@batch_dd2f94357f7142119d7bcd85",
+      "new_request_id": "mechanism32-0008@batch_dd2f94357f7142119d7bcd85",
+      "old_status_at_reuse": "ON_HOLD",
+      "release": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+        "line": 1060,
+        "ordinal": 1059
+      },
+      "allocation": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+        "line": 1062,
+        "ordinal": 1061
+      }
+    },
+    {
+      "rank": 0,
+      "new_gid": 8,
+      "page_id": 1,
+      "previous_gid": 0,
+      "previous_request_id": "mechanism32-0000@batch_dd2f94357f7142119d7bcd85",
+      "new_request_id": "mechanism32-0008@batch_dd2f94357f7142119d7bcd85",
+      "old_status_at_reuse": "ON_HOLD",
+      "release": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+        "line": 1060,
+        "ordinal": 1059
+      },
+      "allocation": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+        "line": 1513,
+        "ordinal": 1512
+      }
+    },
+    {
+      "rank": 0,
+      "new_gid": 24,
+      "page_id": 9,
+      "previous_gid": 16,
+      "previous_request_id": "mechanism32-0016@batch_dd2f94357f7142119d7bcd85",
+      "new_request_id": "mechanism32-0024@batch_dd2f94357f7142119d7bcd85",
+      "old_status_at_reuse": "ON_HOLD",
+      "release": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+        "line": 4341,
+        "ordinal": 4340
+      },
+      "allocation": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+        "line": 4343,
+        "ordinal": 4342
+      }
+    },
+    {
+      "rank": 0,
+      "new_gid": 24,
+      "page_id": 1,
+      "previous_gid": 16,
+      "previous_request_id": "mechanism32-0016@batch_dd2f94357f7142119d7bcd85",
+      "new_request_id": "mechanism32-0024@batch_dd2f94357f7142119d7bcd85",
+      "old_status_at_reuse": "ON_HOLD",
+      "release": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+        "line": 4341,
+        "ordinal": 4340
+      },
+      "allocation": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+        "line": 4794,
+        "ordinal": 4793
+      }
+    },
+    {
+      "rank": 0,
+      "new_gid": 40,
+      "page_id": 0,
+      "previous_gid": 32,
+      "previous_request_id": "mechanism32-0000@batch_0ff907448bae46139877eee6",
+      "new_request_id": "mechanism32-0008@batch_0ff907448bae46139877eee6",
+      "old_status_at_reuse": "ON_HOLD",
+      "release": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+        "line": 7640,
+        "ordinal": 7639
+      },
+      "allocation": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+        "line": 7642,
+        "ordinal": 7641
+      }
+    },
+    {
+      "rank": 0,
+      "new_gid": 40,
+      "page_id": 1,
+      "previous_gid": 32,
+      "previous_request_id": "mechanism32-0000@batch_0ff907448bae46139877eee6",
+      "new_request_id": "mechanism32-0008@batch_0ff907448bae46139877eee6",
+      "old_status_at_reuse": "ON_HOLD",
+      "release": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+        "line": 7640,
+        "ordinal": 7639
+      },
+      "allocation": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+        "line": 8093,
+        "ordinal": 8092
+      }
+    },
+    {
+      "rank": 0,
+      "new_gid": 56,
+      "page_id": 9,
+      "previous_gid": 48,
+      "previous_request_id": "mechanism32-0016@batch_0ff907448bae46139877eee6",
+      "new_request_id": "mechanism32-0024@batch_0ff907448bae46139877eee6",
+      "old_status_at_reuse": "ON_HOLD",
+      "release": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+        "line": 10921,
+        "ordinal": 10920
+      },
+      "allocation": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+        "line": 10923,
+        "ordinal": 10922
+      }
+    },
+    {
+      "rank": 0,
+      "new_gid": 56,
+      "page_id": 1,
+      "previous_gid": 48,
+      "previous_request_id": "mechanism32-0016@batch_0ff907448bae46139877eee6",
+      "new_request_id": "mechanism32-0024@batch_0ff907448bae46139877eee6",
+      "old_status_at_reuse": "ON_HOLD",
+      "release": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+        "line": 10921,
+        "ordinal": 10920
+      },
+      "allocation": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+        "line": 11374,
+        "ordinal": 11373
+      }
+    }
+  ],
+  "Host_restore_metadata_proofs": [
+    {
+      "rank": 0,
+      "request_id": "mechanism32-0000@batch_dd2f94357f7142119d7bcd85",
+      "gid": 0,
+      "hold_decoded_length": 128,
+      "restore_decoded_length": 128,
+      "hold_context": 320,
+      "restore_context": 320,
+      "on_hold": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+        "line": 1061,
+        "ordinal": 1060
+      },
+      "H2D_wait": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+        "line": 1970,
+        "ordinal": 1969
+      },
+      "scope": "native_all-layer_copy_completion_and_metadata_continuity_NOT_KV_bytecheck"
+    },
+    {
+      "rank": 0,
+      "request_id": "mechanism32-0016@batch_dd2f94357f7142119d7bcd85",
+      "gid": 16,
+      "hold_decoded_length": 128,
+      "restore_decoded_length": 128,
+      "hold_context": 320,
+      "restore_context": 320,
+      "on_hold": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+        "line": 4342,
+        "ordinal": 4341
+      },
+      "H2D_wait": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+        "line": 5251,
+        "ordinal": 5250
+      },
+      "scope": "native_all-layer_copy_completion_and_metadata_continuity_NOT_KV_bytecheck"
+    },
+    {
+      "rank": 0,
+      "request_id": "mechanism32-0000@batch_0ff907448bae46139877eee6",
+      "gid": 32,
+      "hold_decoded_length": 128,
+      "restore_decoded_length": 128,
+      "hold_context": 320,
+      "restore_context": 320,
+      "on_hold": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+        "line": 7641,
+        "ordinal": 7640
+      },
+      "H2D_wait": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+        "line": 8550,
+        "ordinal": 8549
+      },
+      "scope": "native_all-layer_copy_completion_and_metadata_continuity_NOT_KV_bytecheck"
+    },
+    {
+      "rank": 0,
+      "request_id": "mechanism32-0016@batch_0ff907448bae46139877eee6",
+      "gid": 48,
+      "hold_decoded_length": 128,
+      "restore_decoded_length": 128,
+      "hold_context": 320,
+      "restore_context": 320,
+      "on_hold": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+        "line": 10922,
+        "ordinal": 10921
+      },
+      "H2D_wait": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+        "line": 11831,
+        "ordinal": 11830
+      },
+      "scope": "native_all-layer_copy_completion_and_metadata_continuity_NOT_KV_bytecheck"
+    },
+    {
+      "rank": 1,
+      "request_id": "mechanism32-0001@batch_dd2f94357f7142119d7bcd85",
+      "gid": 1,
+      "hold_decoded_length": 128,
+      "restore_decoded_length": 128,
+      "hold_context": 320,
+      "restore_context": 320,
+      "on_hold": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720130.jsonl",
+        "line": 1061,
+        "ordinal": 1060
+      },
+      "H2D_wait": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720130.jsonl",
+        "line": 1970,
+        "ordinal": 1969
+      },
+      "scope": "native_all-layer_copy_completion_and_metadata_continuity_NOT_KV_bytecheck"
+    },
+    {
+      "rank": 1,
+      "request_id": "mechanism32-0017@batch_dd2f94357f7142119d7bcd85",
+      "gid": 17,
+      "hold_decoded_length": 128,
+      "restore_decoded_length": 128,
+      "hold_context": 320,
+      "restore_context": 320,
+      "on_hold": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720130.jsonl",
+        "line": 4342,
+        "ordinal": 4341
+      },
+      "H2D_wait": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720130.jsonl",
+        "line": 5251,
+        "ordinal": 5250
+      },
+      "scope": "native_all-layer_copy_completion_and_metadata_continuity_NOT_KV_bytecheck"
+    },
+    {
+      "rank": 1,
+      "request_id": "mechanism32-0001@batch_0ff907448bae46139877eee6",
+      "gid": 33,
+      "hold_decoded_length": 128,
+      "restore_decoded_length": 128,
+      "hold_context": 320,
+      "restore_context": 320,
+      "on_hold": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720130.jsonl",
+        "line": 7641,
+        "ordinal": 7640
+      },
+      "H2D_wait": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720130.jsonl",
+        "line": 8550,
+        "ordinal": 8549
+      },
+      "scope": "native_all-layer_copy_completion_and_metadata_continuity_NOT_KV_bytecheck"
+    },
+    {
+      "rank": 1,
+      "request_id": "mechanism32-0017@batch_0ff907448bae46139877eee6",
+      "gid": 49,
+      "hold_decoded_length": 128,
+      "restore_decoded_length": 128,
+      "hold_context": 320,
+      "restore_context": 320,
+      "on_hold": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720130.jsonl",
+        "line": 10922,
+        "ordinal": 10921
+      },
+      "H2D_wait": {
+        "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720130.jsonl",
+        "line": 11831,
+        "ordinal": 11830
+      },
+      "scope": "native_all-layer_copy_completion_and_metadata_continuity_NOT_KV_bytecheck"
+    }
+  ],
+  "attention_to_MoE_proofs": [
+    {
+      "decode_group": 0,
+      "decode_iteration": 1,
+      "layer": 3,
+      "global_valid_MoE_ingress_rows": 16,
+      "global_valid_rows_method": "sum all8 local actual ingress rows at same iteration/layer",
+      "local_valid_rows": {
+        "0": 2,
+        "1": 2,
+        "2": 2,
+        "3": 2,
+        "4": 2,
+        "5": 2,
+        "6": 2,
+        "7": 2
+      },
+      "largest_attention_slice_rows": 1,
+      "rank_proofs": {
+        "0": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 43,
+            "ordinal": 42
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 44,
+            "ordinal": 43
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        },
+        "1": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720130.jsonl",
+            "line": 43,
+            "ordinal": 42
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720130.jsonl",
+            "line": 44,
+            "ordinal": 43
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        },
+        "2": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720131.jsonl",
+            "line": 43,
+            "ordinal": 42
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720131.jsonl",
+            "line": 44,
+            "ordinal": 43
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        },
+        "3": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720132.jsonl",
+            "line": 43,
+            "ordinal": 42
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720132.jsonl",
+            "line": 44,
+            "ordinal": 43
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        },
+        "4": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720133.jsonl",
+            "line": 43,
+            "ordinal": 42
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720133.jsonl",
+            "line": 44,
+            "ordinal": 43
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        },
+        "5": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720134.jsonl",
+            "line": 43,
+            "ordinal": 42
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720134.jsonl",
+            "line": 44,
+            "ordinal": 43
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        },
+        "6": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720135.jsonl",
+            "line": 43,
+            "ordinal": 42
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720135.jsonl",
+            "line": 44,
+            "ordinal": 43
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        },
+        "7": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720136.jsonl",
+            "line": 43,
+            "ordinal": 42
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720136.jsonl",
+            "line": 44,
+            "ordinal": 43
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        }
+      },
+      "scope": "actual tensor-shape execution trace; no expert-routing occupancy or GPU completion claim"
+    },
+    {
+      "decode_group": 0,
+      "decode_iteration": 2,
+      "layer": 3,
+      "global_valid_MoE_ingress_rows": 16,
+      "global_valid_rows_method": "sum all8 local actual ingress rows at same iteration/layer",
+      "local_valid_rows": {
+        "0": 2,
+        "1": 2,
+        "2": 2,
+        "3": 2,
+        "4": 2,
+        "5": 2,
+        "6": 2,
+        "7": 2
+      },
+      "largest_attention_slice_rows": 1,
+      "rank_proofs": {
+        "0": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 53,
+            "ordinal": 52
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 54,
+            "ordinal": 53
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        },
+        "1": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720130.jsonl",
+            "line": 53,
+            "ordinal": 52
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720130.jsonl",
+            "line": 54,
+            "ordinal": 53
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        },
+        "2": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720131.jsonl",
+            "line": 53,
+            "ordinal": 52
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720131.jsonl",
+            "line": 54,
+            "ordinal": 53
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        },
+        "3": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720132.jsonl",
+            "line": 53,
+            "ordinal": 52
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720132.jsonl",
+            "line": 54,
+            "ordinal": 53
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        },
+        "4": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720133.jsonl",
+            "line": 53,
+            "ordinal": 52
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720133.jsonl",
+            "line": 54,
+            "ordinal": 53
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        },
+        "5": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720134.jsonl",
+            "line": 53,
+            "ordinal": 52
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720134.jsonl",
+            "line": 54,
+            "ordinal": 53
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        },
+        "6": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720135.jsonl",
+            "line": 53,
+            "ordinal": 52
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720135.jsonl",
+            "line": 54,
+            "ordinal": 53
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        },
+        "7": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720136.jsonl",
+            "line": 53,
+            "ordinal": 52
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720136.jsonl",
+            "line": 54,
+            "ordinal": 53
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        }
+      },
+      "scope": "actual tensor-shape execution trace; no expert-routing occupancy or GPU completion claim"
+    },
+    {
+      "decode_group": 0,
+      "decode_iteration": 3,
+      "layer": 3,
+      "global_valid_MoE_ingress_rows": 16,
+      "global_valid_rows_method": "sum all8 local actual ingress rows at same iteration/layer",
+      "local_valid_rows": {
+        "0": 2,
+        "1": 2,
+        "2": 2,
+        "3": 2,
+        "4": 2,
+        "5": 2,
+        "6": 2,
+        "7": 2
+      },
+      "largest_attention_slice_rows": 1,
+      "rank_proofs": {
+        "0": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 62,
+            "ordinal": 61
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 63,
+            "ordinal": 62
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        },
+        "1": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720130.jsonl",
+            "line": 62,
+            "ordinal": 61
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720130.jsonl",
+            "line": 63,
+            "ordinal": 62
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        },
+        "2": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720131.jsonl",
+            "line": 62,
+            "ordinal": 61
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720131.jsonl",
+            "line": 63,
+            "ordinal": 62
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        },
+        "3": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720132.jsonl",
+            "line": 62,
+            "ordinal": 61
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720132.jsonl",
+            "line": 63,
+            "ordinal": 62
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        },
+        "4": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720133.jsonl",
+            "line": 62,
+            "ordinal": 61
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720133.jsonl",
+            "line": 63,
+            "ordinal": 62
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        },
+        "5": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720134.jsonl",
+            "line": 62,
+            "ordinal": 61
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720134.jsonl",
+            "line": 63,
+            "ordinal": 62
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        },
+        "6": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720135.jsonl",
+            "line": 62,
+            "ordinal": 61
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720135.jsonl",
+            "line": 63,
+            "ordinal": 62
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        },
+        "7": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720136.jsonl",
+            "line": 62,
+            "ordinal": 61
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720136.jsonl",
+            "line": 63,
+            "ordinal": 62
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        }
+      },
+      "scope": "actual tensor-shape execution trace; no expert-routing occupancy or GPU completion claim"
+    },
+    {
+      "decode_group": 0,
+      "decode_iteration": 4,
+      "layer": 3,
+      "global_valid_MoE_ingress_rows": 16,
+      "global_valid_rows_method": "sum all8 local actual ingress rows at same iteration/layer",
+      "local_valid_rows": {
+        "0": 2,
+        "1": 2,
+        "2": 2,
+        "3": 2,
+        "4": 2,
+        "5": 2,
+        "6": 2,
+        "7": 2
+      },
+      "largest_attention_slice_rows": 1,
+      "rank_proofs": {
+        "0": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 70,
+            "ordinal": 69
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+            "line": 71,
+            "ordinal": 70
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        },
+        "1": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720130.jsonl",
+            "line": 70,
+            "ordinal": 69
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720130.jsonl",
+            "line": 71,
+            "ordinal": 70
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        },
+        "2": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720131.jsonl",
+            "line": 70,
+            "ordinal": 69
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720131.jsonl",
+            "line": 71,
+            "ordinal": 70
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        },
+        "3": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720132.jsonl",
+            "line": 70,
+            "ordinal": 69
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720132.jsonl",
+            "line": 71,
+            "ordinal": 70
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        },
+        "4": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720133.jsonl",
+            "line": 70,
+            "ordinal": 69
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720133.jsonl",
+            "line": 71,
+            "ordinal": 70
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        },
+        "5": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720134.jsonl",
+            "line": 70,
+            "ordinal": 69
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720134.jsonl",
+            "line": 71,
+            "ordinal": 70
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        },
+        "6": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720135.jsonl",
+            "line": 70,
+            "ordinal": 69
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720135.jsonl",
+            "line": 71,
+            "ordinal": 70
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        },
+        "7": {
+          "attention_merge": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720136.jsonl",
+            "line": 70,
+            "ordinal": 69
+          },
+          "MoE_ingress": {
+            "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720136.jsonl",
+            "line": 71,
+            "ordinal": 70
+          },
+          "attention_slice_rows": [
+            1,
+            1
+          ],
+          "valid_rows": 2,
+          "communication_slots_NOT_valid_rows": 128
+        }
+      },
+      "scope": "actual tensor-shape execution trace; no expert-routing occupancy or GPU completion claim"
+    }
+  ],
+  "final_zero_page_evidence": {
+    "0": {
+      "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720129.jsonl",
+      "line": 13178,
+      "ordinal": 13177,
+      "host_shared_num_used_pages": 0,
+      "GPU_num_used_pages": 0
+    },
+    "1": {
+      "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720130.jsonl",
+      "line": 13178,
+      "ordinal": 13177,
+      "host_shared_num_used_pages": 0,
+      "GPU_num_used_pages": 0
+    },
+    "2": {
+      "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720131.jsonl",
+      "line": 13178,
+      "ordinal": 13177,
+      "host_shared_num_used_pages": 0,
+      "GPU_num_used_pages": 0
+    },
+    "3": {
+      "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720132.jsonl",
+      "line": 13178,
+      "ordinal": 13177,
+      "host_shared_num_used_pages": 0,
+      "GPU_num_used_pages": 0
+    },
+    "4": {
+      "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720133.jsonl",
+      "line": 13178,
+      "ordinal": 13177,
+      "host_shared_num_used_pages": 0,
+      "GPU_num_used_pages": 0
+    },
+    "5": {
+      "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720134.jsonl",
+      "line": 13178,
+      "ordinal": 13177,
+      "host_shared_num_used_pages": 0,
+      "GPU_num_used_pages": 0
+    },
+    "6": {
+      "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720135.jsonl",
+      "line": 13178,
+      "ordinal": 13177,
+      "host_shared_num_used_pages": 0,
+      "GPU_num_used_pages": 0
+    },
+    "7": {
+      "file": "/home/admin/batchgen-r1-dev-20261027/campaigns/r1-perf-fix-short-q0-20261028-v1/trace/mechanism-pid720136.jsonl",
+      "line": 13178,
+      "ordinal": 13177,
+      "host_shared_num_used_pages": 0,
+      "GPU_num_used_pages": 0
+    }
+  },
+  "limitations": [
+    "Host KV inventory is confirmed all-layer prefill plus continuous-position decode D2H wait lower bound, not reserved pages or decode context metadata.",
+    "H2D completion plus nonreset metadata is not numerical equality of KV bytes; the synthetic native inventory operator smoke is complementary.",
+    "No new same-layer Host KV streaming decoder is introduced or claimed. Existing active-set suspension/resumption occurs at page boundaries.",
+    "Observer adds Python/JSON overhead. Run throughput separately with observer disabled.",
+    "Strict process, memfd and cudaHostUnregister settlement comes from the parent's owned launcher/operator-smoke, not this metadata analyzer."
+  ]
+}

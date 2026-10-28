@@ -1,0 +1,314 @@
+{
+  "status": "passed_operator_only_NOT_model_or_transport_qualified",
+  "source_sha256": "d95c70ea35d7bbef5b5e8134f82b60e4c64cfbc3c2e7c9de2b7272b968cae6f2",
+  "shape": {
+    "experts": 32,
+    "hidden": 7168,
+    "intermediate": 2048,
+    "stride": 128
+  },
+  "math": "native_DeepGEMM_FP8_UE8M0_two_masked_GEMMs_plus_stock_SG_fused_activation",
+  "bank_build": {
+    "build_wall_seconds": 4.786574009805918,
+    "build_synchronized": true,
+    "resident_bytes": 1420296192,
+    "local_experts": 32,
+    "hidden": 7168,
+    "intermediate": 2048,
+    "source_policy": "original_fp8_fp32_block_scales_to_bf16_then_ue8m0_fp8",
+    "host_sources_modified": false,
+    "temporary_upload_max_experts": 1
+  },
+  "references": [
+    {
+      "case": "eager_all64",
+      "expert": 0,
+      "valid_rows": 64,
+      "S1": {
+        "NRMSE": 2.0796142052859068e-05,
+        "max_abs": 0.001953125
+      },
+      "S3": {
+        "NRMSE": 9.943915756593924e-06,
+        "max_abs": 0.000244140625
+      }
+    },
+    {
+      "case": "eager_all64",
+      "expert": 1,
+      "valid_rows": 64,
+      "S1": {
+        "NRMSE": 2.0951947590219788e-05,
+        "max_abs": 0.001953125
+      },
+      "S3": {
+        "NRMSE": 3.211391594959423e-05,
+        "max_abs": 0.00048828125
+      }
+    },
+    {
+      "case": "eager_all64",
+      "expert": 7,
+      "valid_rows": 64,
+      "S1": {
+        "NRMSE": 2.6329225875088014e-05,
+        "max_abs": 0.001953125
+      },
+      "S3": {
+        "NRMSE": 2.4426683012279682e-05,
+        "max_abs": 0.00048828125
+      }
+    },
+    {
+      "case": "eager_all64",
+      "expert": 31,
+      "valid_rows": 64,
+      "S1": {
+        "NRMSE": 2.5528101105010137e-05,
+        "max_abs": 0.001953125
+      },
+      "S3": {
+        "NRMSE": 2.3371916540781967e-05,
+        "max_abs": 0.000244140625
+      }
+    },
+    {
+      "case": "graph_step0",
+      "expert": 1,
+      "valid_rows": 1,
+      "S1": {
+        "NRMSE": 0.0,
+        "max_abs": 0.0
+      },
+      "S3": {
+        "NRMSE": 0.0,
+        "max_abs": 0.0
+      }
+    },
+    {
+      "case": "graph_step0",
+      "expert": 7,
+      "valid_rows": 64,
+      "S1": {
+        "NRMSE": 3.757039303309284e-05,
+        "max_abs": 0.00390625
+      },
+      "S3": {
+        "NRMSE": 1.5561829059151933e-05,
+        "max_abs": 0.0009765625
+      }
+    },
+    {
+      "case": "graph_step0",
+      "expert": 31,
+      "valid_rows": 64,
+      "S1": {
+        "NRMSE": 4.4902757508680224e-05,
+        "max_abs": 0.0078125
+      },
+      "S3": {
+        "NRMSE": 2.8232025215402246e-05,
+        "max_abs": 0.0009765625
+      }
+    },
+    {
+      "case": "graph_step1",
+      "expert": 0,
+      "valid_rows": 64,
+      "S1": {
+        "NRMSE": 4.681866994360462e-05,
+        "max_abs": 0.0078125
+      },
+      "S3": {
+        "NRMSE": 2.8558064514072612e-05,
+        "max_abs": 0.001953125
+      }
+    },
+    {
+      "case": "graph_step1",
+      "expert": 1,
+      "valid_rows": 64,
+      "S1": {
+        "NRMSE": 2.6566278393147513e-05,
+        "max_abs": 0.00390625
+      },
+      "S3": {
+        "NRMSE": 2.5995299438363872e-05,
+        "max_abs": 0.001953125
+      }
+    },
+    {
+      "case": "graph_step1",
+      "expert": 7,
+      "valid_rows": 64,
+      "S1": {
+        "NRMSE": 3.932699473807588e-05,
+        "max_abs": 0.0078125
+      },
+      "S3": {
+        "NRMSE": 2.08159599424107e-05,
+        "max_abs": 0.001953125
+      }
+    },
+    {
+      "case": "graph_step1",
+      "expert": 31,
+      "valid_rows": 64,
+      "S1": {
+        "NRMSE": 5.629432780551724e-05,
+        "max_abs": 0.0078125
+      },
+      "S3": {
+        "NRMSE": 3.1290339393308386e-05,
+        "max_abs": 0.001953125
+      }
+    }
+  ],
+  "graph_cases": [
+    {
+      "step": 0,
+      "counts": [
+        0,
+        1,
+        32,
+        64,
+        0,
+        1,
+        32,
+        64,
+        0,
+        1,
+        32,
+        64,
+        0,
+        1,
+        32,
+        64,
+        0,
+        1,
+        32,
+        64,
+        0,
+        1,
+        32,
+        64,
+        0,
+        1,
+        32,
+        64,
+        0,
+        1,
+        32,
+        64
+      ],
+      "valid_rows_eager_graph_bitwise": true,
+      "zero_expert_output_untouched": true,
+      "partial_M_tile_padding": "undefined_NOT_compared_NOT_valid_output",
+      "input_signature": 11215.728515625
+    },
+    {
+      "step": 1,
+      "counts": [
+        64,
+        64,
+        64,
+        64,
+        64,
+        64,
+        64,
+        64,
+        64,
+        64,
+        64,
+        64,
+        64,
+        64,
+        64,
+        64,
+        64,
+        64,
+        64,
+        64,
+        64,
+        64,
+        64,
+        64,
+        64,
+        64,
+        64,
+        64,
+        64,
+        64,
+        64,
+        64
+      ],
+      "valid_rows_eager_graph_bitwise": true,
+      "zero_expert_output_untouched": true,
+      "partial_M_tile_padding": "undefined_NOT_compared_NOT_valid_output",
+      "input_signature": 112594.4453125
+    },
+    {
+      "step": 2,
+      "counts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "valid_rows_eager_graph_bitwise": true,
+      "zero_expert_output_untouched": true,
+      "partial_M_tile_padding": "undefined_NOT_compared_NOT_valid_output",
+      "input_signature": -147618.6875
+    }
+  ],
+  "python_capture_and_eager_calls_NOT_replay_count": {
+    "native_masked": 14,
+    "old_S1_S3_imported": false
+  },
+  "graph_math_ms": {
+    "samples": [
+      0.2833920121192932,
+      0.26764801144599915,
+      0.2696000039577484,
+      0.2696639895439148,
+      0.2715519964694977,
+      0.2717759907245636,
+      0.2696639895439148,
+      0.26767998933792114,
+      0.2696000039577484,
+      0.26764801144599915
+    ],
+    "mean": 0.27082239985466006
+  },
+  "torch_peak_allocated_bytes": 2064498176,
+  "wall_seconds": 14.700197354890406,
+  "precision_scope": "converted UE8M0 operands; not original FP32-scale or SGLang whole-model equality"
+}

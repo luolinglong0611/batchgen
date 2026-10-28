@@ -1,0 +1,401 @@
+{
+  "status": "all8_normal_FP8_routing_permutation_zero_rows_reuse_passed_NOT_model_qualified",
+  "ranks": [
+    {
+      "schema": "R1-normal-prefill-routing-operator-v1",
+      "rank": 0,
+      "source": {
+        "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/models/deepseek/deepseekv3/resident_prefill.py",
+        "sha256": "65b95586cc38680aabd7df44ada1a71c539451c8c975bb72b8a58ae5eb0c5aa9"
+      },
+      "GPU": "NVIDIA L20D",
+      "capability": [
+        10,
+        3
+      ],
+      "scope": "normal_FP8_scatter_gather_routing_NOT_DeepGEMM_or_fullmodel_qualification",
+      "status": "normal_routing_CPU_reference_exact_four_rounds",
+      "rounds": [
+        {
+          "round": 0,
+          "local_rows": 0,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        },
+        {
+          "round": 1,
+          "local_rows": 4,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        },
+        {
+          "round": 2,
+          "local_rows": 1,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        },
+        {
+          "round": 3,
+          "local_rows": 2,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        }
+      ],
+      "normal_dispatch_submissions": 4,
+      "normal_combine_submissions": 4,
+      "peak_allocated_bytes": 158195200,
+      "wall_seconds": 41.182039494626224
+    },
+    {
+      "schema": "R1-normal-prefill-routing-operator-v1",
+      "rank": 1,
+      "source": {
+        "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/models/deepseek/deepseekv3/resident_prefill.py",
+        "sha256": "65b95586cc38680aabd7df44ada1a71c539451c8c975bb72b8a58ae5eb0c5aa9"
+      },
+      "GPU": "NVIDIA L20D",
+      "capability": [
+        10,
+        3
+      ],
+      "scope": "normal_FP8_scatter_gather_routing_NOT_DeepGEMM_or_fullmodel_qualification",
+      "status": "normal_routing_CPU_reference_exact_four_rounds",
+      "rounds": [
+        {
+          "round": 0,
+          "local_rows": 1,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        },
+        {
+          "round": 1,
+          "local_rows": 0,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        },
+        {
+          "round": 2,
+          "local_rows": 4,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        },
+        {
+          "round": 3,
+          "local_rows": 1,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        }
+      ],
+      "normal_dispatch_submissions": 4,
+      "normal_combine_submissions": 4,
+      "peak_allocated_bytes": 158202368,
+      "wall_seconds": 41.291137009859085
+    },
+    {
+      "schema": "R1-normal-prefill-routing-operator-v1",
+      "rank": 2,
+      "source": {
+        "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/models/deepseek/deepseekv3/resident_prefill.py",
+        "sha256": "65b95586cc38680aabd7df44ada1a71c539451c8c975bb72b8a58ae5eb0c5aa9"
+      },
+      "GPU": "NVIDIA L20D",
+      "capability": [
+        10,
+        3
+      ],
+      "scope": "normal_FP8_scatter_gather_routing_NOT_DeepGEMM_or_fullmodel_qualification",
+      "status": "normal_routing_CPU_reference_exact_four_rounds",
+      "rounds": [
+        {
+          "round": 0,
+          "local_rows": 2,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        },
+        {
+          "round": 1,
+          "local_rows": 1,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        },
+        {
+          "round": 2,
+          "local_rows": 0,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        },
+        {
+          "round": 3,
+          "local_rows": 4,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        }
+      ],
+      "normal_dispatch_submissions": 4,
+      "normal_combine_submissions": 4,
+      "peak_allocated_bytes": 158202368,
+      "wall_seconds": 40.35592711623758
+    },
+    {
+      "schema": "R1-normal-prefill-routing-operator-v1",
+      "rank": 3,
+      "source": {
+        "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/models/deepseek/deepseekv3/resident_prefill.py",
+        "sha256": "65b95586cc38680aabd7df44ada1a71c539451c8c975bb72b8a58ae5eb0c5aa9"
+      },
+      "GPU": "NVIDIA L20D",
+      "capability": [
+        10,
+        3
+      ],
+      "scope": "normal_FP8_scatter_gather_routing_NOT_DeepGEMM_or_fullmodel_qualification",
+      "status": "normal_routing_CPU_reference_exact_four_rounds",
+      "rounds": [
+        {
+          "round": 0,
+          "local_rows": 3,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        },
+        {
+          "round": 1,
+          "local_rows": 2,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        },
+        {
+          "round": 2,
+          "local_rows": 1,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        },
+        {
+          "round": 3,
+          "local_rows": 0,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        }
+      ],
+      "normal_dispatch_submissions": 4,
+      "normal_combine_submissions": 4,
+      "peak_allocated_bytes": 144055808,
+      "wall_seconds": 40.496101489290595
+    },
+    {
+      "schema": "R1-normal-prefill-routing-operator-v1",
+      "rank": 4,
+      "source": {
+        "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/models/deepseek/deepseekv3/resident_prefill.py",
+        "sha256": "65b95586cc38680aabd7df44ada1a71c539451c8c975bb72b8a58ae5eb0c5aa9"
+      },
+      "GPU": "NVIDIA L20D",
+      "capability": [
+        10,
+        3
+      ],
+      "scope": "normal_FP8_scatter_gather_routing_NOT_DeepGEMM_or_fullmodel_qualification",
+      "status": "normal_routing_CPU_reference_exact_four_rounds",
+      "rounds": [
+        {
+          "round": 0,
+          "local_rows": 0,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        },
+        {
+          "round": 1,
+          "local_rows": 3,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        },
+        {
+          "round": 2,
+          "local_rows": 2,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        },
+        {
+          "round": 3,
+          "local_rows": 1,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        }
+      ],
+      "normal_dispatch_submissions": 4,
+      "normal_combine_submissions": 4,
+      "peak_allocated_bytes": 180004864,
+      "wall_seconds": 40.35898417420685
+    },
+    {
+      "schema": "R1-normal-prefill-routing-operator-v1",
+      "rank": 5,
+      "source": {
+        "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/models/deepseek/deepseekv3/resident_prefill.py",
+        "sha256": "65b95586cc38680aabd7df44ada1a71c539451c8c975bb72b8a58ae5eb0c5aa9"
+      },
+      "GPU": "NVIDIA L20D",
+      "capability": [
+        10,
+        3
+      ],
+      "scope": "normal_FP8_scatter_gather_routing_NOT_DeepGEMM_or_fullmodel_qualification",
+      "status": "normal_routing_CPU_reference_exact_four_rounds",
+      "rounds": [
+        {
+          "round": 0,
+          "local_rows": 2,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        },
+        {
+          "round": 1,
+          "local_rows": 0,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        },
+        {
+          "round": 2,
+          "local_rows": 3,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        },
+        {
+          "round": 3,
+          "local_rows": 2,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        }
+      ],
+      "normal_dispatch_submissions": 4,
+      "normal_combine_submissions": 4,
+      "peak_allocated_bytes": 180915200,
+      "wall_seconds": 40.391786583699286
+    },
+    {
+      "schema": "R1-normal-prefill-routing-operator-v1",
+      "rank": 6,
+      "source": {
+        "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/models/deepseek/deepseekv3/resident_prefill.py",
+        "sha256": "65b95586cc38680aabd7df44ada1a71c539451c8c975bb72b8a58ae5eb0c5aa9"
+      },
+      "GPU": "NVIDIA L20D",
+      "capability": [
+        10,
+        3
+      ],
+      "scope": "normal_FP8_scatter_gather_routing_NOT_DeepGEMM_or_fullmodel_qualification",
+      "status": "normal_routing_CPU_reference_exact_four_rounds",
+      "rounds": [
+        {
+          "round": 0,
+          "local_rows": 1,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        },
+        {
+          "round": 1,
+          "local_rows": 2,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        },
+        {
+          "round": 2,
+          "local_rows": 0,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        },
+        {
+          "round": 3,
+          "local_rows": 3,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        }
+      ],
+      "normal_dispatch_submissions": 4,
+      "normal_combine_submissions": 4,
+      "peak_allocated_bytes": 171165184,
+      "wall_seconds": 40.536651440896094
+    },
+    {
+      "schema": "R1-normal-prefill-routing-operator-v1",
+      "rank": 7,
+      "source": {
+        "path": "/home/admin/batchgen-r1-dev-20261027/repo-r1-perf-fixes-20261028-v1/batchgen/models/deepseek/deepseekv3/resident_prefill.py",
+        "sha256": "65b95586cc38680aabd7df44ada1a71c539451c8c975bb72b8a58ae5eb0c5aa9"
+      },
+      "GPU": "NVIDIA L20D",
+      "capability": [
+        10,
+        3
+      ],
+      "scope": "normal_FP8_scatter_gather_routing_NOT_DeepGEMM_or_fullmodel_qualification",
+      "status": "normal_routing_CPU_reference_exact_four_rounds",
+      "rounds": [
+        {
+          "round": 0,
+          "local_rows": 4,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        },
+        {
+          "round": 1,
+          "local_rows": 1,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        },
+        {
+          "round": 2,
+          "local_rows": 2,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        },
+        {
+          "round": 3,
+          "local_rows": 0,
+          "mismatched_elements": 0,
+          "max_abs_error": 0.0,
+          "exact_CPU_reference": true
+        }
+      ],
+      "normal_dispatch_submissions": 4,
+      "normal_combine_submissions": 4,
+      "peak_allocated_bytes": 158247936,
+      "wall_seconds": 40.28178435843438
+    }
+  ],
+  "all_rank_zero_rows_exercised": true,
+  "expert_math": "independent_global_expert_id_multiplier_not_GEMM",
+  "rounds_per_rank": 4,
+  "no_performance_claim": true
+}

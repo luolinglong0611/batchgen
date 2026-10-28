@@ -1,0 +1,42 @@
+{
+  "schema": "r1-perf-fixes-final-validation-v1",
+  "CPU_tests": {
+    "passed": 64,
+    "failed": 0,
+    "public_core_tests": 57,
+    "private_observer_tests": 7
+  },
+  "same_source_manifest": "97bc3a48434e4f741561af3a24ed062c44cd5cad793107d380eeddf14f895189",
+  "same_source_overlays_current_local": true,
+  "all4_full_model_batches_complete": true,
+  "full_model_requests": 128,
+  "full_model_output_tokens": 32768,
+  "all_mechanism_criteria_passed": true,
+  "hot_q0_seconds": 127.03811814,
+  "hot_q128_seconds": 74.067124778,
+  "hot_elapsed_reduction_percent": 41.69692855779263,
+  "all_markdown_local_links_resolve": true,
+  "result_files_sha256": {
+    "final-settlement.json": "b838968fac2782e4836281fcd37ebd961fe02648099ef231b02fce8538c21554",
+    "normal-prefill-routing-gpu.json": "d93d7d63b9cb34865105040c246b27f524e8e3f48d382a2d25b9eacdf642958e",
+    "native-moe-gpu.json": "956081e7e082e26619e89929f3095dcc70d676c6d1f05f51048218a98206a897",
+    "phase-ledger.json": "3c6698f709e8d9e9b54968d38405e4f97345707859496ec7a95c10cf4a687393",
+    "source-overlay-pins.json": "a1ab303eec2452e819e484be59a44b4c2a5456b041f4a568724c095ffd64a511",
+    "q0/mechanism-analysis.json": "52c814769531cd266ae28fab62f8626e43b8d214975291174ef760aa43d62093",
+    "q0/short-test-analysis-v2.json": "adeb5cbf0dbb64f3f8b6d5db134807f5b3ced69713a489d6372eec066db66edd",
+    "q0/validation-state.json": "a2e1d5a246f26ec0fcd32785bcda70d3c78eebed90a6f97353d14e71a92e8235",
+    "q128/mechanism-analysis.json": "5d1cab062aaa64930e5d58bb75212ac4ca0b3085921b7226819de81195e3210e",
+    "q128/short-test-analysis-v2.json": "60f2329c59015f5d0660262852d0fcf48294dd6a432d1dd2fdfeb0358b49df5c",
+    "q128/validation-state.json": "9cec8024213a00a68e1d7319a2e73674a4032be5697bd8993736cc2670cd9efd",
+    "q128/cold-results/receipt.json": "dacf23ddce0e6a34547e31ead64ab9d5d6550abd82ed9d6d671dd2d4aaf90f58",
+    "q128/hot-results/receipt.json": "fe08cce7c859890bd0fddad9e4f1f8b4d6cd57d6b2072169dcf303917cf9e138",
+    "q0/cold-results/receipt.json": "cdfe8c9fe48a6289071ba3ce540717b0f4e49a6f620ccb081e500a210279aa42",
+    "q0/hot-results/receipt.json": "fc77b189edfeea70d33cc3cb8fe06c342e8b4fc240bcb57cfaa4414fa7869742"
+  },
+  "TPS_clarification": {
+    "current_hot_output_TPS": 110.60237621689419,
+    "same_fixture_previous_output_TPS": 64.48458242251478,
+    "large_pool_original8K2K_postfix_TPS": "not_measured",
+    "report_sha256": "f87c612300b0a11682fb0008877d59108a85497e584a545f72932b0b9ad33e96"
+  }
+}
