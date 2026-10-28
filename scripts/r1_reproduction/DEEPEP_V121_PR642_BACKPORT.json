@@ -1,0 +1,36 @@
+{
+  "status": "GPU_OPERATOR_PASSED_SAME_HARNESS_BEFORE_AFTER_NOT_FULL_MODEL",
+  "upstream_PR": "https://github.com/deepseek-ai/DeepEP/pull/642",
+  "upstream_merge": "d4f41e4e93602a15e95f55f6ee8df8f1aaa0e4bb",
+  "upstream_merge_parent": "723716fc11ee44cbd87035fe9c3a360feca33528",
+  "upstream_issue": "https://github.com/deepseek-ai/DeepEP/issues/700",
+  "patch": "deepep_v121_pr642.patch",
+  "patch_sha256": "37094953ab1aeeb59863057ad761be2c2cf1980057469c852c16754aa375afe9",
+  "files": {
+    "csrc/kernels/internode_ll.cu": {
+      "before_sha256": "91d374c7354d2c92716c23793b6beec65d47cb22498eb22a7954dda0d880161e",
+      "after_sha256": "c73adbab13e14aa89e86e2f43161d51618171c3e82b855e50b29a3225f7eade5",
+      "before_equals_official_v1_2_1_tag": true
+    },
+    "csrc/kernels/utils.cuh": {
+      "before_sha256": "e192d4a083b97c0800f2f4cf892ad23271c4b4fa729df64e3be5666fb460ec07",
+      "after_sha256": "972d77a83af6d6d5fed80888a6778ff3ee06755bc3ef148f1f31595115002ccb",
+      "before_equals_official_v1_2_1_tag": true
+    }
+  },
+  "mapped_paths": "official legacy/internode_ll.cu+utils.cuh -> v1.2.1 csrc/kernels/internode_ll.cu+utils.cuh",
+  "exact_merged_placement": "after reduction decode_and_accumulate reads, before elect_one_sync/mbarrier_arrive(empty_barriers[stage_idx]); not an arbitrary fence after wait",
+  "existing_v121_helper": "already present without compiler memory clobber; replace with exact PR helper body rather than duplicate definition",
+  "changes": "one call plus helper compiler memory clobber, no dispatch math/API/buffer/layout change",
+  "patch_check_returncode": 0,
+  "private_apply_bytecheck": true,
+  "production_modified": false,
+  "isolated_build_and_same_harness_before_after": {
+    "before": "8rank cap448 identity/count v2 failed eager sparse+0.5 errors; counts exact",
+    "after": "same v2 harness, new private wheel only: all8 eager+3replay PASS, separate newprocess30replay PASS; everyrank zero mismatches and devicecounters[30,30], process exit0",
+    "wheel_sha256": "5ff34991dd20ba027bcf50a04540a42c03bc2f4a396d42476be2ab65abeae59c",
+    "baseline_env_unchanged": true,
+    "performance_claim": false
+  },
+  "GPU_qualified": true
+}

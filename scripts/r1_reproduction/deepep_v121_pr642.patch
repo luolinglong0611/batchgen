@@ -1,0 +1,27 @@
+--- a/csrc/kernels/internode_ll.cu
++++ b/csrc/kernels/internode_ll.cu
+@@ -890,7 +890,7 @@
+                             combined_values, 0, 0, false, topk_weight
+                         );
+                     }
+-
++                    fence_view_async_shared();
+                     if (elect_one_sync(lane_id))
+                         mbarrier_arrive(empty_barriers[stage_idx]);
+                     stage_idx = (stage_idx + 1) % kNumStages;
+--- a/csrc/kernels/utils.cuh
++++ b/csrc/kernels/utils.cuh
+@@ -323,7 +323,12 @@
+ }
+ 
+ __device__ __forceinline__ void fence_view_async_shared() {
+-    asm volatile("fence.proxy.async.shared::cta; \n" :: );
++    asm volatile (
++        "{\n\t"
++        "fence.proxy.async.shared::cta; \n"
++        "}"
++        ::
++        : "memory");
+ }
+ 
+ __device__ __forceinline__ void fence_barrier_init() {
