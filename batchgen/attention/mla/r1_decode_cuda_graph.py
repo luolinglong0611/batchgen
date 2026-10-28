@@ -36,6 +36,9 @@ def attention_source_tensors(wrapper):
         rows.append((child + ".weight", getattr(module, child).weight))
     rows.extend(("scale:" + name, value)
                 for name, value in sorted(wrapper.weight_dequant_scale.items()))
+    for index, item in enumerate(getattr(module, "_r1_native_gemm_weights", ())):
+        rows.extend((("prepared_ordinary_weight:" + str(index), item.weight),
+                     ("prepared_ordinary_scale:" + str(index), item.scale)))
     return tuple(rows)
 
 
@@ -219,8 +222,12 @@ class _AttentionPlan:
         # layers. FI owns the pinned scheduler staging workspace itself.
         q = torch.arange(self.rows + 1, dtype=torch.int32)
         indptr = torch.from_numpy(np.array(arrays["kv_indptr"][start:end + 1] - begin, copy=True))
-        indices = torch.from_numpy(np.array(arrays["kv_indices"][begin:stop], copy=True))
-        lengths = torch.from_numpy(np.array(arrays["lengths"][start:end], copy=True))
+        # These are immutable per-forward CPU arrays. from_numpy retains the
+        # slice and its backing allocation; cpu_keepalive keeps that storage
+        # alive through FI's asynchronous staging and all 61 layers. Avoid a
+        # second 6--8 MiB copy of the token-page indices on every decode step.
+        indices = torch.from_numpy(arrays["kv_indices"][begin:stop])
+        lengths = torch.from_numpy(arrays["lengths"][start:end])
         self.cpu_keepalive = (q, indptr, indices, lengths)
         self.wrapper.plan(q, indptr, indices, lengths, self.heads, 512, 64, 1,
                           False, self.scale, torch.bfloat16, torch.bfloat16)
@@ -392,6 +399,10 @@ def compute_attention(wrapper, hidden_states, batch, blocked_k):
                                      weights["o_proj.weight_scale_inv"])
         outputs.append(output.view(rows, 1, -1))
         kv_rows.append(kv)
+    if len(outputs) == 1:
+        # The one-slice profile already owns contiguous output/KV tensors.
+        # Avoid copying both again merely to concatenate a single element.
+        return outputs[0], kv_rows[0]
     return torch.cat(outputs, dim=0), torch.cat(kv_rows, dim=0)
 
 

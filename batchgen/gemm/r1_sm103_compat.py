@@ -118,6 +118,12 @@ def w8a16_gemm(weight_data_fp8, weight_scale_inv_fp32, activation_bf16):
     main's ``fa3_backend.w8a16_gemm`` already does.  This is not BF16 GEMM and
     does not accept BF16 checkpoint weights or add a bias.
     """
+    if os.environ.get("BATCHGEN_R1_ORDINARY_GEMM", "legacy") != "legacy":
+        from . import r1_native_gemm
+        r1_native_gemm.enabled()  # Validate explicit selection before dispatch.
+        result = r1_native_gemm.linear(weight_data_fp8, weight_scale_inv_fp32, activation_bf16)
+        _record_backend("deep_gemm.fp8_gemm_nt/stock_SG_UE8M0/prepared_ordinary_weights")
+        return result
     if not sm103_fp8_compat_enabled():
         raise RuntimeError(f"common SM103 W8A16 requires {COMPAT_ENV}=1")
     torch = importlib.import_module("torch")

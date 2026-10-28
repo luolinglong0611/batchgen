@@ -361,6 +361,10 @@ class DeepseekV3ParallelStrategyManager:
 		self._config_lm_head_hook()
 		self.model.eval()
 		self.model.to(self.engine_config.Basic_Config.device_torch)
+		# Additional immutable ordinary FP8 banks must be resident before the
+		# worker sizes its GPU KV pool or captures the first decode graph.
+		from batchgen.gemm.r1_native_gemm import prepare_model
+		prepare_model(self.model)
 		exchange = getattr(self, "_r1_prefill_normal_exchange", None)
 		if exchange is None:
 			exchange = R1NormalPrefillExchange(dist.group.WORLD)
@@ -612,6 +616,8 @@ class DeepseekV3ParallelStrategyManager:
 
 		self.model.eval()
 		self.model.to(self.engine_config.Basic_Config.device_torch)
+		from batchgen.gemm.r1_native_gemm import prepare_model
+		prepare_model(self.model)
 		# Log final GPU memory (rank 0 only)
 		if self.rank == 0:
 			used_memory = torch.cuda.memory_allocated(self.engine_config.Basic_Config.device_torch)

@@ -109,6 +109,9 @@ def _weight_signature(model):
     result = []
     def projections(owner):
         module = getattr(owner, "module", owner)
+        for item in getattr(module, "_r1_native_gemm_weights", ()):
+            result.extend(_tensor_signature(value, version=True)
+                          for value in (item.weight, item.scale))
         for key in ("gate_proj", "up_proj", "down_proj"):
             projection = getattr(module, key, None)
             if projection is not None:
@@ -314,6 +317,12 @@ class _WholeRecord:
                 raise RuntimeError("Whole-decode attention did not retain its captured external tensor inputs")
             aliases = [parameter.detach() for parameter in self.model.parameters()
                        if parameter.device.type == "cuda"]
+            for layer in self.model.model.layers:
+                attn = getattr(layer.self_attn, "module", layer.self_attn)
+                shared = getattr(layer.mlp, "shared_experts", None)
+                for module in (attn, getattr(shared, "module", shared)):
+                    for item in getattr(module, "_r1_native_gemm_weights", ()):
+                        aliases.extend(value.detach() for value in (item.weight, item.scale))
             for layer in self.model.model.layers[3:]:
                 adapter = layer.mlp.r1_deepep_adapter
                 native_weights = getattr(adapter, "graph_weight_tensors", None)

@@ -428,6 +428,14 @@ def act_quant(
     x_flat = x.view(-1, original_shape[-1])
     M, N = x_flat.shape
 
+    import os
+    if (os.environ.get("BATCHGEN_R1_ORDINARY_GEMM", "legacy") != "legacy"
+            and num_valid_tokens is None and block_size == 128):
+        from batchgen.gemm import r1_native_gemm
+        r1_native_gemm.enabled()
+        y, scales = r1_native_gemm.quantize(x_flat)
+        return y.view(original_shape), scales
+
     if x.dtype == torch.bfloat16 and M > 0 and block_size == 128:
         if scale_tma_aligned and x.dim() != 2:
             raise ValueError("scale_tma_aligned act_quant currently requires a 2D input")

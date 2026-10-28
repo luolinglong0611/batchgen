@@ -81,6 +81,15 @@ def w8a8_deepgemm(
     M, K = a.shape
     N = w.shape[0]
 
+    import os
+    if os.environ.get("BATCHGEN_R1_ORDINARY_GEMM", "legacy") != "legacy":
+        from . import r1_native_gemm
+        r1_native_gemm.enabled()
+        if c is not None or num_valid_tokens is not None or expected_m is not None or recipe is not None:
+            raise ValueError("Native ordinary GEMM does not implement grouped/accumulation options")
+        result = r1_native_gemm.gemm(a, a_scale, w, w_scale, out=out)
+        return result if out is None else None
+
     if sm103_fp8_compat_enabled():
         if c is not None or num_valid_tokens is not None or expected_m is not None:
             raise ValueError("SM103 FP8 compatibility supports ordinary GEMM only; no accumulation or masked-M options")
