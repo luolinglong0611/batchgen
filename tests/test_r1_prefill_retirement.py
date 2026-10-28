@@ -1,9 +1,12 @@
 """Run real candidate offload/retirement methods on strict CPU test doubles."""
 import ast
 import logging
+import os
+import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -56,7 +59,7 @@ class PrefillRetirementContracts(unittest.TestCase):
         state.pending_prefill_offload_tasks = []
         state.pending_prefill_offload_tensors = []
         state.pending_prefill_offload_layer_idx = None
-        wrapper_ns = {"AttnWrapperBase": state}
+        wrapper_ns = {"AttnWrapperBase": state, "os": os}
         compile_methods(WRAPPER, "DeepSeekAttnWrapper", {"_forward_prefill", "_offload_prepacked_kv"}, wrapper_ns)
         return state, wrapper_ns
 
@@ -134,6 +137,42 @@ class PrefillRetirementContracts(unittest.TestCase):
         self.assertEqual(len(state.pending_prefill_offload_tasks), 2)
         self.assertIs(state.pending_prefill_offload_tensors[0], source)
         self.assertEqual(events[-1], ("wait", 32))
+
+    def test_packed_offload_uses_cpu_lengths_and_one_owned_native_future(self):
+        state, ns = self.setup_real()
+        wrapper, events = self.make_wrapper(state, ns)
+        source = Tensor(5)
+        source.shape = (5, 576)
+        wrapper.prepack_seq_lengths = [3, 2]
+        wrapper.prepack_max_seqlen = 3
+        class NoGPURead:
+            def __getitem__(self, index):
+                raise AssertionError("packed offload must not read GPU cu_seqlens")
+        wrapper.prepack_cu_seqlens = NoGPURead()
+        class OwnedTask:
+            def wait(self):
+                if state.pending_prefill_offload_tensors != [source]:
+                    raise AssertionError("packed source released before native completion")
+                events.append(("wait-packed",))
+        def packed_submit(**kwargs):
+            self.assertEqual(kwargs["sequence_ids"], [32, 7])
+            self.assertEqual(kwargs["sequence_lengths"], [3, 2])
+            self.assertIs(kwargs["k_tensor"], source)
+            events.append(("submit-packed",))
+            return OwnedTask()
+        wrapper.core_engine.host_paged_kv_worker_view.async_offload_packed_layer_kv_to_host = packed_submit
+        # This test concerns future/source ownership. Validation of this pure
+        # CPU metadata seam is exercised against the real helper separately.
+        helper = ModuleType("batchgen.attention.mla.common_flashinfer_backend")
+        helper.packed_prefill_cpu_metadata = lambda *args: ((3, 2), (0, 3, 5))
+        with patch.dict(os.environ, {"BATCHGEN_R1_SM103_MLA_COMPAT": "flashinfer-fa2",
+                                     "BATCHGEN_R1_PREFILL_PREPARATION_REUSE": "1"}), \
+             patch.dict(sys.modules, {helper.__name__: helper}):
+            ns["_offload_prepacked_kv"](wrapper, source)
+        self.assertEqual(events, [("submit-packed",)])
+        self.assertEqual(len(state.pending_prefill_offload_tasks), 1)
+        self.assertEqual(state.retire_pending_prefill_offloads(reason="packed test"), 1)
+        self.assertEqual(events[-1], ("wait-packed",))
 
 
 if __name__ == "__main__":

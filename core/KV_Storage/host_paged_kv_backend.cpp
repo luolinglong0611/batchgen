@@ -13,6 +13,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <future>
@@ -37,6 +38,14 @@ constexpr std::int64_t kEmptySequenceId =
     std::numeric_limits<std::int64_t>::min();
 constexpr std::int64_t kTombstoneSequenceId = kEmptySequenceId + 1;
 constexpr std::int64_t kPrefixResidentSequenceId = kEmptySequenceId + 2;
+
+bool OrderedHostKVAllocationEnabled() {
+    const char* value = std::getenv("BATCHGEN_HOST_KV_ORDERED_ALLOC");
+    if (value == nullptr || std::strcmp(value, "0") == 0) return false;
+    if (std::strcmp(value, "1") == 0) return true;
+    throw std::invalid_argument(
+        "BATCHGEN_HOST_KV_ORDERED_ALLOC must be explicitly 0 or 1");
+}
 
 constexpr bool IsReservedSequenceId(std::int64_t sequence_id) {
     return sequence_id == kEmptySequenceId ||
@@ -626,6 +635,7 @@ std::vector<std::int32_t> HostPagedKVBackend::SharedState::AcquirePages(
     if (IsReservedSequenceId(sequence_id)) {
         throw std::invalid_argument("Sequence ID is reserved by HostPagedKV");
     }
+    const bool ordered = OrderedHostKVAllocationEnabled();
     std::vector<std::int32_t> pages(num_pages);
     {
         ScopedMutexLock lock(&header->allocation_mutex);
@@ -644,6 +654,10 @@ std::vector<std::int32_t> HostPagedKVBackend::SharedState::AcquirePages(
         }
         header->free_stack_top.store(new_top, std::memory_order_relaxed);
     }
+    // These pages have not been linked or written yet. Sorting only this new
+    // allocation lets packed prefill coalesce adjacent physical pages without
+    // moving any existing prefix/sequence data or changing its logical order.
+    if (ordered) std::sort(pages.begin(), pages.end());
 
     {
         ScopedMutexLock lock(&header->sequence_mutex);
@@ -678,6 +692,7 @@ HostPagedKVBackend::SharedState::AcquirePagesForSequences(
         throw std::invalid_argument(
             "sequence_ids and num_tokens must have the same length");
     }
+    const bool ordered = OrderedHostKVAllocationEnabled();
     if (sequence_ids.empty()) {
         return {};
     }
@@ -741,6 +756,7 @@ HostPagedKVBackend::SharedState::AcquirePagesForSequences(
         for (std::size_t j = 0; j < required_pages[i]; ++j) {
             allocations[i][j] = free_stack[new_top + offset++];
         }
+        if (ordered) std::sort(allocations[i].begin(), allocations[i].end());
     }
     header->free_stack_top.store(new_top, std::memory_order_relaxed);
 

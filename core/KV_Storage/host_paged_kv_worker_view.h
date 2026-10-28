@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "../utils.h"
+#include "contiguous_copy_coalescer.h"
 #include "host_kv_page_table.h"
 #include "host_paged_kv_backend.h"
 #include "host_paged_kv_config_utils.h"
@@ -957,6 +958,21 @@ class HostPagedKVWorkerView : private LayerMapper {
             const auto cuda_stream = CopyStream(CopyDirection::kDeviceToHost);
             this->WaitForProducerEvent(cuda_stream, *producer_event);
 
+            // Resolve every destination before submitting a DMA. A malformed
+            // later sequence must not throw after earlier copies have started
+            // and release their captured source before stream completion.
+            std::vector<std::vector<std::int32_t>> pages_by_sequence;
+            pages_by_sequence.reserve(sequence_ids.size());
+            for (std::size_t i = 0; i < sequence_ids.size(); ++i) {
+                if (packed_lengths[i] == 0) {
+                    pages_by_sequence.emplace_back();
+                    continue;
+                }
+                auto pages = page_table_.Pages(sequence_ids[i]);
+                geometry_.ValidatePageCapacity(pages, packed_lengths[i], kOpName);
+                pages_by_sequence.push_back(std::move(pages));
+            }
+
             const auto* k_base =
                 static_cast<const std::byte*>(prepared_k.data_ptr());
             const std::size_t k_token_bytes = geometry_.KDataTokenBytes();
@@ -979,16 +995,26 @@ class HostPagedKVWorkerView : private LayerMapper {
             }
 
             std::byte* host_base = backend_.DataBase();
+            std::size_t dma_runs = 0, copied_bytes = 0, k_page_chunks = 0;
+            auto enqueue = [this, cuda_stream, &dma_runs, &copied_bytes](const std::byte* src,
+                                               std::byte* dst,
+                                               std::size_t bytes) {
+                EnqueueCopy(src, dst, bytes, CopyDirection::kDeviceToHost,
+                            cuda_stream);
+                ++dma_runs;
+                copied_bytes += bytes;
+            };
+            worker_detail::ContiguousCopyCoalescer k_copies(enqueue);
+            worker_detail::ContiguousCopyCoalescer scale_copies(enqueue);
+            worker_detail::ContiguousCopyCoalescer v_copies(enqueue);
             std::size_t packed_token_offset = 0;
             for (std::size_t batch_idx = 0; batch_idx < sequence_ids.size();
                  ++batch_idx) {
-                const std::int64_t sequence_id = sequence_ids[batch_idx];
                 const std::size_t tokens_to_copy = packed_lengths[batch_idx];
                 if (tokens_to_copy == 0) {
                     continue;
                 }
-                const auto pages = page_table_.Pages(sequence_id);
-                geometry_.ValidatePageCapacity(pages, tokens_to_copy, kOpName);
+                const auto& pages = pages_by_sequence[batch_idx];
                 const auto* seq_k_src =
                     k_base + packed_token_offset * k_token_bytes;
                 const std::byte* seq_scale_src =
@@ -1006,8 +1032,8 @@ class HostPagedKVWorkerView : private LayerMapper {
                             page_offset_tokens);
                         const std::byte* src =
                             seq_k_src + relative_token_offset * k_token_bytes;
-                        EnqueueCopy(src, dst, chunk_tokens * k_token_bytes,
-                                    CopyDirection::kDeviceToHost, cuda_stream);
+                        ++k_page_chunks;
+                        k_copies.Add(src, dst, chunk_tokens * k_token_bytes);
                         if (seq_scale_src != nullptr) {
                             // Second region of the same page: the chunk's
                             // tokens are contiguous there too, so one more
@@ -1018,10 +1044,8 @@ class HostPagedKVWorkerView : private LayerMapper {
                             const std::byte* scale_src =
                                 seq_scale_src +
                                 relative_token_offset * scale_token_bytes;
-                            EnqueueCopy(scale_src, scale_dst,
-                                        chunk_tokens * scale_token_bytes,
-                                        CopyDirection::kDeviceToHost,
-                                        cuda_stream);
+                            scale_copies.Add(scale_src, scale_dst,
+                                             chunk_tokens * scale_token_bytes);
                         }
                     });
                 if constexpr (kHasVCache) {
@@ -1042,16 +1066,24 @@ class HostPagedKVWorkerView : private LayerMapper {
                                 const std::byte* src =
                                     seq_v_src +
                                     relative_token_offset * v_token_bytes;
-                                EnqueueCopy(
-                                    src, dst, chunk_tokens * v_token_bytes,
-                                    CopyDirection::kDeviceToHost, cuda_stream);
+                                v_copies.Add(src, dst,
+                                             chunk_tokens * v_token_bytes);
                             });
                     }
                 }
                 packed_token_offset += tokens_to_copy;
             }
 
+            k_copies.Flush();
+            scale_copies.Flush();
+            v_copies.Flush();
             this->SynchronizeWithEvent(cuda_stream);
+            static std::atomic<bool> logged{false};
+            if (logger_ != nullptr && !logged.exchange(true)) {
+                logger_->info("[HOST-PREFILL-COPY] packed=true k_page_chunks={} "
+                              "dma_runs={} copied_bytes={} coalesced=true",
+                              k_page_chunks, dma_runs, copied_bytes);
+            }
         });
     }
 

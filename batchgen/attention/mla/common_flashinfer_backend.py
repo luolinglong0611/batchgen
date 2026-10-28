@@ -4,8 +4,9 @@ These names can replace only main's native attention imports under an explicit
 selector. Projections, scales, RoPE, absorption and cache append stay with the
 caller. This module selects no runtime itself and imports Torch/FlashInfer only
 inside an actual call. Explicit eager decode-forward scopes share only the
-compatibility adapter's preparation across layers. No state survives a forward;
-there is no graph, weight/phase cache or old-branch GEMM tuning.
+compatibility adapter's preparation across layers. An opt-in R1 prefill path
+retains one same-stream FA2 plan/workspace per CPU thread, keyed by complete
+length values and Q/K/V geometry; it stores no model weights or KV content.
 
 Decode reinterprets native page64 cache as page1 token views and supplies only
 valid token addresses. No KV content, including valid NaNs, is written or
@@ -16,9 +17,12 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import inspect
+import logging
+import os
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
+from threading import local
 
 from .common_sdpa_backend import (
     LATENT_DIM, ROPE_DIM, _cpu_ints, _integer, _scale,
@@ -30,6 +34,77 @@ EXPECTED_FLASHINFER_VERSION = "0.5.2"
 BACKEND_ID = "r1-common-flashinfer-0.5.2-fa2-bf16-v1"
 WORKSPACE_BYTES = 128 * 1024**2
 _DECODE_FORWARD_STATE = ContextVar("r1_fa2_decode_forward_state", default=None)
+_PREFILL_PLAN_CACHE = local()
+PREFILL_REUSE_ENV = "BATCHGEN_R1_PREFILL_PREPARATION_REUSE"
+
+
+def prefill_preparation_reuse_enabled():
+    value = os.environ.get(PREFILL_REUSE_ENV, "0")
+    if value not in ("0", "1"):
+        raise ValueError(f"{PREFILL_REUSE_ENV} must be explicitly 0 or 1")
+    return value == "1"
+
+
+def packed_prefill_cpu_metadata(lengths, num_sequences, total_tokens, max_seqlen):
+    """Validate the worker's CPU prepack contract, without any device reads.
+
+    R1's prepacked attention uses cumulative lengths only in this FI adapter.
+    Supplying this CPU tensor therefore avoids a per-layer GPU->CPU roundtrip;
+    the actual FA2 plan still owns a persistent CUDA int32 indptr.
+    """
+    if not isinstance(lengths, (list, tuple)) or len(lengths) != num_sequences:
+        raise ValueError("R1 prefill CPU lengths must match the prepacked row count")
+    _integer(num_sequences, "prepacked sequence count", minimum=0)
+    _integer(total_tokens, "prepacked token count", minimum=0)
+    _integer(max_seqlen, "max_seqlen", minimum=1)
+    cu = [0]
+    for length in lengths:
+        _integer(length, "prepacked sequence length", minimum=1)
+        if length > max_seqlen:
+            raise ValueError("R1 prefill CPU length exceeds max_seqlen")
+        cu.append(cu[-1] + length)
+    if cu[-1] != total_tokens or cu[-1] >= 2**31:
+        raise ValueError("R1 prefill CPU lengths must cover all tokens within int32")
+    return tuple(lengths), tuple(cu)
+
+
+def clear_prefill_plan_cache():
+    """Release this thread's single retained plan/workspace, if any."""
+    _PREFILL_PLAN_CACHE.entry = None
+
+
+def _prepare_prefill_wrapper(q, k, v, cu_q, scale, torch, device):
+    stream = torch.cuda.current_stream(device).cuda_stream
+    key = (device, stream, _tensor_geometry(q), _tensor_geometry(k),
+           _tensor_geometry(v), tuple(cu_q), scale)
+    reuse = prefill_preparation_reuse_enabled()
+    previous = getattr(_PREFILL_PLAN_CACHE, "entry", None) if reuse else None
+    if previous is not None and previous[0] == key:
+        _PREFILL_PLAN_CACHE.hits = getattr(_PREFILL_PLAN_CACHE, "hits", 0) + 1
+        return previous[2]
+    # One entry per CPU thread: changed lengths/layout/device/stream replace
+    # rather than accumulate workspaces. GPU data addresses are intentionally
+    # excluded because every physical layer supplies different Q/K/V values.
+    workspace = torch.empty(WORKSPACE_BYTES, dtype=torch.uint8, device=device)
+    wrapper = _ragged_wrapper(workspace, _flashinfer())
+    cu = torch.tensor(cu_q, dtype=torch.int32, device=device)
+    wrapper.plan(
+        qo_indptr=cu, kv_indptr=cu,
+        num_qo_heads=q.shape[1], num_kv_heads=k.shape[1],
+        head_dim_qk=q.shape[2], head_dim_vo=v.shape[2],
+        causal=True, sm_scale=scale, q_data_type=torch.bfloat16,
+        kv_data_type=torch.bfloat16, pos_encoding_mode="NONE",
+        logits_soft_cap=0.0,
+    )
+    wrapper._batchgen_prefill_resources = (workspace, cu)
+    if reuse:
+        _PREFILL_PLAN_CACHE.entry = (key, workspace, wrapper, cu)
+        _PREFILL_PLAN_CACHE.plans = getattr(_PREFILL_PLAN_CACHE, "plans", 0) + 1
+        logging.info("[R1-PREFILL-FA2] plan=%d hits=%d rows=%d tokens=%d "
+                     "workspace_bytes=%d same_stream_reuse=true",
+                     _PREFILL_PLAN_CACHE.plans, getattr(_PREFILL_PLAN_CACHE, "hits", 0),
+                     len(cu_q) - 1, q.shape[0], WORKSPACE_BYTES)
+    return wrapper
 
 
 def _tensor_geometry(tensor):
@@ -355,19 +430,8 @@ def flash_attn_varlen_func(
     spans = plan_packed_prefill(tuple(q.shape), tuple(k.shape), tuple(v.shape), cu_q, max_seqlen_q)
     if not spans:
         return v.new_empty(v.shape)
-    flashinfer = _flashinfer()
     with torch.inference_mode():
-        workspace = torch.empty(WORKSPACE_BYTES, dtype=torch.uint8, device=device)
-        wrapper = _ragged_wrapper(workspace, flashinfer)
-        cu = torch.tensor(cu_q, dtype=torch.int32, device=device)
-        wrapper.plan(
-            qo_indptr=cu, kv_indptr=cu,
-            num_qo_heads=q.shape[1], num_kv_heads=k.shape[1],
-            head_dim_qk=q.shape[2], head_dim_vo=v.shape[2],
-            causal=True, sm_scale=scale, q_data_type=torch.bfloat16,
-            kv_data_type=torch.bfloat16, pos_encoding_mode="NONE",
-            logits_soft_cap=0.0,
-        )
+        wrapper = _prepare_prefill_wrapper(q, k, v, cu_q, scale, torch, device)
         output = wrapper.run(q, k, v)
         if tuple(output.shape) != tuple(v.shape) or output.dtype != torch.bfloat16 or output.device != device:
             raise RuntimeError("FlashInfer prefill returned an unexpected shape/dtype/device")

@@ -327,11 +327,23 @@ class DeepSeekAttnWrapper(AttnWrapperBase):
             # Prepack mode: hidden_states is [1, total_tokens, hidden_dim]
             # Prepacked attention expects [total_tokens, hidden_dim]
             hidden_states_2d = hidden_states.squeeze(0)
+            if (os.environ.get("BATCHGEN_R1_SM103_MLA_COMPAT") == "flashinfer-fa2"
+                    and os.environ.get("BATCHGEN_R1_PREFILL_PREPARATION_REUSE") == "1"):
+                from batchgen.attention.mla.common_flashinfer_backend import packed_prefill_cpu_metadata
+                _, cpu_cu = packed_prefill_cpu_metadata(
+                    self.prepack_seq_lengths, self.prepack_num_sequences,
+                    hidden_states_2d.shape[0], self.prepack_max_seqlen,
+                )
+                # The compatibility adapter plans on CPU. Native attention
+                # paths keep the original CUDA metadata contract unchanged.
+                cu_seqlens = torch.tensor(cpu_cu, dtype=torch.int32)
+            else:
+                cu_seqlens = self.prepack_cu_seqlens.to(hidden_states_2d.device)
 
             attn_output, offload_kv = self.module.prefill_attn_w8a16_prepacked(
                 hidden_states_2d,
                 self.position_ids.to(hidden_states_2d.device),
-                self.prepack_cu_seqlens.to(hidden_states_2d.device),
+                cu_seqlens,
                 self.prepack_max_seqlen,
                 self.prepack_num_sequences,
                 self.weight_dequant_scale
@@ -375,6 +387,27 @@ class DeepSeekAttnWrapper(AttnWrapperBase):
         global_sequence_ids = self.cur_batch
         if num_sequences:
             AttnWrapperBase.pin_prefill_offload_tensor(offload_kv, self.layer_idx)
+
+        if (os.environ.get("BATCHGEN_R1_SM103_MLA_COMPAT") == "flashinfer-fa2"
+                and os.environ.get("BATCHGEN_R1_PREFILL_PREPARATION_REUSE") == "1"):
+            from batchgen.attention.mla.common_flashinfer_backend import packed_prefill_cpu_metadata
+            lengths, _ = packed_prefill_cpu_metadata(
+                self.prepack_seq_lengths, num_sequences,
+                offload_kv.shape[0], self.prepack_max_seqlen,
+            )
+            if num_sequences:
+                # A single native future owns the complete packed source;
+                # native code resolves each sequence's actual physical pages.
+                # Keep the same pinned-source and next-layer retirement rules.
+                task = self.core_engine.host_paged_kv_worker_view.async_offload_packed_layer_kv_to_host(
+                    layer_idx=self.layer_idx,
+                    sequence_ids=list(global_sequence_ids),
+                    k_tensor=offload_kv.unsqueeze(1),
+                    v_tensor=None,
+                    sequence_lengths=list(lengths),
+                )
+                AttnWrapperBase.track_prefill_offload_task(task, self.layer_idx)
+            return
 
         for seq_idx in range(num_sequences):
             start_idx = cu_seqlens[seq_idx].item()
