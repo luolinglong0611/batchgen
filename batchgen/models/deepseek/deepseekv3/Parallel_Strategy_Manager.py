@@ -132,6 +132,8 @@ class DeepseekV3ParallelStrategyManager:
 			Configure a model skeletion for prefill pure dp
 			and the corresponding weight copy task.
 		"""
+		if self.prefill_uses_resident_ep():
+			return self._configure_r1_resident_prefill()
 		import time
 		start_time = time.perf_counter()
 		timings = {}
@@ -261,6 +263,133 @@ class DeepseekV3ParallelStrategyManager:
 			from scripts.r1_reproduction.r1_full_model_trace import register_model_hooks
 			register_model_hooks(self.model, self.rank, self.world_size, "prefill")
 		return self.model, self.weight_copy_task
+
+	def _r1_native_moe(self):
+		from .resident_prefill import moe_backend
+		return moe_backend() == "deep_gemm"
+
+	def default_prefill_moe_mode(self):
+		from .resident_prefill import resident_prefill_requested
+		return "resident_ep" if resident_prefill_requested() else "streamed"
+
+	def set_prefill_moe_mode(self, mode):
+		if mode != self.default_prefill_moe_mode():
+			raise ValueError("R1 prefill mode must match its explicit resident-prefill opt-in")
+		self._r1_prefill_configuring = mode == "resident_ep"
+
+	def prefill_uses_resident_ep(self):
+		return self.default_prefill_moe_mode() == "resident_ep"
+
+	def prepare_resident_ep_prefill_output(self, total_rows):
+		# The worker calls this existing hook before configure_prefill. Normal
+		# dispatch uses received contiguous rows, not an E*global_rows masked
+		# scratch; retain only the explicit admission bound here.
+		if not self.prefill_uses_resident_ep() or int(total_rows) < 0:
+			raise ValueError("Invalid R1 resident-prefill output preparation")
+		self._r1_prefill_global_rows_bound = int(total_rows)
+
+	def _r1_host_expert_sources(self, layer_idx):
+		from .resident_prefill import local_expert_ids
+		for expert_idx in local_expert_ids(self.global_rank, self.world_size):
+			key = f"routed_expert_{layer_idx}_{expert_idx}"
+			tensors = self.core_engine.get_tensor(key)
+			prefix = f"model.layers.{layer_idx}.mlp.experts.{expert_idx}."
+			item = {}
+			for short, projection in (("gate", "gate_proj"), ("up", "up_proj"), ("down", "down_proj")):
+				item[short] = tensors[projection + ".weight"]
+				item[short + "_scale"] = self.skeleton_state_dict[prefix + projection + ".weight_scale_inv"]
+			yield item
+
+	def get_r1_deepgemm_expert_math(self, layer_idx):
+		"""The sole GPU routed-expert bank, built directly from immutable Host FP8."""
+		if not self._r1_native_moe():
+			raise RuntimeError("The R1 DeepGEMM bank requires its explicit backend opt-in")
+		from .deepgemm_moe import R1DeepGemmExpertMath
+		sources = list(self._r1_host_expert_sources(layer_idx))
+		identities = []
+		for source in sources:
+			for name in ("gate", "up", "down", "gate_scale", "up_scale", "down_scale"):
+				tensor = source[name]
+				if tensor.device.type != "cpu":
+					raise RuntimeError("Build the unique R1 expert bank from Host source tensors")
+				try:
+					version = tensor._version
+				except RuntimeError:
+					version = None
+				identities.append((name, tensor.data_ptr(), tuple(tensor.shape), tuple(tensor.stride()),
+				                   tensor.storage_offset(), str(tensor.dtype), version))
+		identity = (id(self.core_engine), self.global_rank, self.world_size, int(layer_idx), tuple(identities))
+		cache = getattr(self, "_r1_deepgemm_math_by_layer", None)
+		if cache is None:
+			cache = self._r1_deepgemm_math_by_layer = {}
+		if layer_idx in cache:
+			if cache[layer_idx].source_identity != identity:
+				raise RuntimeError("R1 Host expert source changed/remapped after resident bank creation")
+			return cache[layer_idx]
+		math = R1DeepGemmExpertMath.from_expert_sources(
+			iter(sources), device=self.engine_config.Basic_Config.device_torch, source_identity=identity)
+		cache[layer_idx] = math
+		logging.info("[R1_EXPERT_BANK] rank=%d layer=%d source=Host_FP8 local_experts=%d "
+		             "resident_bytes=%d unique_GPU_bank=True build=%s", self.rank, layer_idx, len(sources),
+		             math.resident_bytes, getattr(math, "build_stats", {}))
+		return math
+
+	def _configure_r1_resident_prefill(self):
+		"""Resident EP8 prefill, retaining the original attention/Host-KV wrapper."""
+		import copy
+		from .resident_prefill import R1NormalPrefillExchange, R1ResidentPrefillAdapter, resident_moe_forward
+		if (self.world_size != 8 or self.engine_config.EP_Config.enable_offloading
+		        or self.engine_config.Basic_Config.attn_mode != 3 or not self._r1_native_moe()):
+			raise RuntimeError("R1 resident prefill requires resident EP8 and native DeepGEMM")
+		started = time.perf_counter()
+		self.loaded_model_config.phase = "prefill"
+		config = copy.copy(self.loaded_model_config)
+		config.phase, config.ep_size = "prefill", self.world_size
+		self.model = DeepseekV3ForCausalLM(config)
+		self.weight_copy_task = {"attn": [], "routed_expert": [], "shared_expert": []}
+		self.state_dict_name_map = {}
+		self.local_routed_experts, self.host_routed_experts = [], []
+		self.enable_ep_offloading = False
+		self._extract_dequantize_scale()
+		self._load_model_skeleton()
+		self._load_attn_module()
+		self._load_shared_expert_module()
+		self._config_attn_module()
+		# This selects the unique Host-source bank and discards the unused CPU
+		# routed-expert module placeholders before model.to(device).
+		self._config_expert_module()
+		self._config_lm_head_hook()
+		self.model.eval()
+		self.model.to(self.engine_config.Basic_Config.device_torch)
+		exchange = getattr(self, "_r1_prefill_normal_exchange", None)
+		if exchange is None:
+			exchange = R1NormalPrefillExchange(dist.group.WORLD)
+			self._r1_prefill_normal_exchange = exchange
+		for i in range(config.first_k_dense_replace, config.num_hidden_layers):
+			moe = self.model.model.layers[i].mlp
+			moe._r1_resident_prefill_adapter = R1ResidentPrefillAdapter(
+				moe, exchange, self.get_r1_deepgemm_expert_math(i), layer_idx=i)
+			moe.forward = types.MethodType(resident_moe_forward, moe)
+		self._r1_prefill_configuring = False
+		self._r1_prefill_phase_active = True
+		# Requantization temporaries have all been released; return their
+		# allocator cache before the later automatic GPU KV sizing. Never do
+		# this in the per-expert packing loop or in the prefill forward.
+		torch.cuda.empty_cache()
+		logging.info("[R1_PREFILL_EP] rank=%d configured=EP8_resident experts_per_rank=32 "
+		             "weight_copy_tasks=0 transport=DeepEP_normal_FP8 math=DeepGEMM_contiguous "
+		             "token_cap=%d setup_seconds=%.3f", self.rank,
+		             self.engine_config.Module_Batching_Config.prefill_micro_batch_token_cap,
+		             time.perf_counter() - started)
+		return self.model, self.weight_copy_task
+
+	def run_resident_ep_collective_only_prefill(self):
+		"""Existing worker hook: zero-row ranks serve all58 expert exchanges."""
+		if not self.prefill_uses_resident_ep() or self.model is None:
+			raise RuntimeError("R1 collective-only prefill requires its resident model")
+		empty = torch.empty((0, 7168), dtype=torch.bfloat16, device=self.engine_config.Basic_Config.device_torch)
+		for layer in self.model.model.layers[self.loaded_model_config.first_k_dense_replace:]:
+			layer.mlp._r1_resident_prefill_adapter(empty)
 	
 	def _warmup(self):
 		# Currently only need to warmup the MoEGate
@@ -313,6 +442,8 @@ class DeepseekV3ParallelStrategyManager:
 		- persistent=True: weights pre-loaded on GPU
 		- persistent=False: weights loaded from buffer each forward
 		"""
+		self._r1_prefill_configuring = False
+		self._r1_prefill_phase_active = False
 		# Phase/model rebuild is outside the timed decode loop. Drain work
 		# before old expert tensors/graphs can lose their backing storage.
 		if getattr(self, "_r1_deepep_pool", None) is not None:
@@ -455,7 +586,8 @@ class DeepseekV3ParallelStrategyManager:
 		torch.cuda.empty_cache()
 		self._extract_dequantize_scale()
 		self._load_model_skeleton()
-		self._load_local_routed_experts()
+		if not self._r1_native_moe():
+			self._load_local_routed_experts()
 		# Load attention and shared expert FP8 weights (required for attn_mode=3 / EP offloading)
 		# These are persistent on GPU, but need explicit loading
 		self._load_attn_module()
@@ -501,6 +633,9 @@ class DeepseekV3ParallelStrategyManager:
 
 		# Warmup compiled kernels
 		self._warmup()
+		if self._r1_native_moe():
+			# Bank construction/warmup is complete, ahead of worker KV sizing.
+			torch.cuda.empty_cache()
 
 		if os.environ.get("R1_FULL_MODEL_TRACE", "0") == "1":
 			from scripts.r1_reproduction.r1_full_model_trace import register_model_hooks
@@ -536,8 +671,15 @@ class DeepseekV3ParallelStrategyManager:
 			raise RuntimeError("R1 LL capacity cannot grow after capture; restart with a larger cap")
 		pool.begin_phase()
 		for layer_idx, moe in moes:
-			moe.r1_deepep_adapter = R1DeepEPDecodeAdapter(moe, pool, layer_idx=layer_idx)
-		logging.info("[R1-DEEPEP-LL] BF16 dispatch/combine; capacity=%d, EP=%d, experts=%d, phase=%d",
+			if self._r1_native_moe():
+				from .deepgemm_moe import R1DeepGemmDecodeAdapter
+				moe.r1_deepep_adapter = R1DeepGemmDecodeAdapter(
+					moe, pool, layer_idx=layer_idx, expert_math=self.get_r1_deepgemm_expert_math(layer_idx))
+			else:
+				moe.r1_deepep_adapter = R1DeepEPDecodeAdapter(moe, pool, layer_idx=layer_idx)
+		logging.info("[R1-DEEPEP-LL] transport=%s math=%s capacity=%d, EP=%d, experts=%d, phase=%d",
+			"FP8_UE8M0_dispatch_BF16_combine" if self._r1_native_moe() else "BF16_dispatch_combine",
+			"DeepGEMM_masked" if self._r1_native_moe() else "legacy_Triton_S1_quant_S3",
 			pool.capacity, pool.world_size, pool.num_experts, pool.phase_configurations)
 
 	def _init_decoding_padding_bsz(self, padding_bsz):
@@ -575,6 +717,9 @@ class DeepseekV3ParallelStrategyManager:
 		Args:
 			num_tokens_per_rank: The max batch size across all ranks for this page
 		"""
+		if getattr(self, "_r1_prefill_configuring", False) or getattr(self, "_r1_prefill_phase_active", False):
+			self._r1_prefill_tokens_per_rank = int(num_tokens_per_rank)
+			return
 		pool = getattr(self, "_r1_deepep_pool", None)
 		if pool is not None and num_tokens_per_rank > pool.capacity:
 			raise RuntimeError("R1 LL batch exceeds fixed process capacity")
@@ -707,6 +852,10 @@ class DeepseekV3ParallelStrategyManager:
 
 
 	def _init_mode_decoding(self):
+		if self._r1_native_moe():
+			# The native adapter reads the unique math bank, never legacy expert
+			# GPU pointer lists. init_num_tokens still establishes the row cap.
+			return
 		# Skip grouped GEMM initialization for EP offloading mode
 		# In EP offloading, non-persistent experts don't have fp8_gate/fp8_up/fp8_down registered
 		# and moe_infer_loop_with_offloading() doesn't use these pointer lists anyway
@@ -1160,6 +1309,16 @@ class DeepseekV3ParallelStrategyManager:
 							self.engine_config.Basic_Config.device_torch
 						)
 
+			if self._r1_native_moe() and (
+				self.loaded_model_config.phase == "decode" or self.prefill_uses_resident_ep()
+			):
+				self.get_r1_deepgemm_expert_math(layer_idx)
+				# Expert parameters were never moved to GPU. Only the unique
+				# DeepGEMM bank owns routed GPU weights; discard CPU placeholders
+				# so model.to(device) cannot create the legacy second GPU copy.
+				for expert_idx in range(len(layer.mlp.experts)):
+					layer.mlp.experts[expert_idx] = None
+				continue
 			for expert_idx in range(len(layer.mlp.experts)):
 				# Routed expert: persistent if NOT in weight_copy_task
 				if (

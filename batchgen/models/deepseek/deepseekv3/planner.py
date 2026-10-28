@@ -41,12 +41,19 @@ class DeepSeekV3Planner(BasePlanner):
 
     def _adjust_config_for_model(self):
         """Opt in to the existing resident EP decode path on eight GPUs."""
+        from .resident_prefill import (
+            moe_backend, resident_prefill_requested, resident_prefill_token_cap,
+        )
+        backend = moe_backend()
+        resident_prefill = resident_prefill_requested()
         name = "BATCHGEN_DEEPSEEK_SINGLE_NODE_RESIDENT_EP"
         requested = os.environ.get(name, "0")
         if requested not in ("0", "1"):
             raise ValueError(f"{name} must be 0 or 1")
         ll_requested = bool(getattr(
             self.config.Module_Batching_Config, "r1_deepep_ll", False))
+        if backend == "deep_gemm" and (self.world_size != 8 or requested != "1" or not ll_requested):
+            raise ValueError("R1 DeepGEMM requires EP8 resident decode and --enable-deepep")
         if ll_requested and self.world_size <= 8:
             if self.world_size != 8 or requested != "1":
                 raise ValueError(
@@ -87,6 +94,14 @@ class DeepSeekV3Planner(BasePlanner):
         buffers.num_k_buffer = 0
         buffers.num_v_buffer = 0
         buffers.kv_buffer_num_tokens = 0
+        if resident_prefill:
+            # A normal-EP prefill processes the whole local prompt microbatch,
+            # not many LL exchanges. Match the explicit SG8K/DP activation
+            # budget by default; this is a new opt-in execution condition.
+            self.config.Module_Batching_Config.prefill_micro_batch_token_cap = resident_prefill_token_cap()
+            buffers.num_prefill_module_buffer = {
+                "attn": 0, "routed_expert": 0, "shared_expert": 0,
+            }
 
     def get_module_shapes(self) -> dict:
         """Return DeepSeek-V3/R1 specific tensor shapes."""
