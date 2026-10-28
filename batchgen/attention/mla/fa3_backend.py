@@ -1172,6 +1172,8 @@ def mla_prefill_flashattention3_w8a16_deepgemm_prepacked(
 		offload_kv: [total_tokens, kv_lora_rank + qk_rope_head_dim]
 	"""
 	total_tokens = hidden_states.shape[0]
+	from batchgen.attention.mla import r1_prefill_rope
+	_fused_prefill_rope = r1_prefill_rope.enabled()
 
 	# Default: FP8 act_quant + DeepGEMM fp8_gemm_nt (matches SGLang/DeepGEMM
 	# blockwise FP8 semantics and the decode path's w8a8_deepgemm). Opt into
@@ -1220,12 +1222,20 @@ def mla_prefill_flashattention3_w8a16_deepgemm_prepacked(
 	# when rope_interleave=true).
 	from batchgen.attention.mla.rotary_embedding import rotary_pos_emb_interleaved_native
 	cos, sin = self.rotary_emb(q_pe.unsqueeze(0), seq_len=max_seqlen)
-	q_pe = rotary_pos_emb_interleaved_native(q_pe.unsqueeze(0), cos, sin, position_ids.unsqueeze(0), 2).squeeze(0)
-	k_pe = rotary_pos_emb_interleaved_native(k_pe.unsqueeze(0), cos, sin, position_ids.unsqueeze(0), 2).squeeze(0)
+	if _fused_prefill_rope:
+		query_states, offload_kv = r1_prefill_rope.prepare_query_and_offload(
+			query_states, normed_kv, k_pe, cos, sin, position_ids,
+		)
+		# Free the projection/rope views before the larger KV expansion. The
+		# new outputs retain exactly the normal Q and Host KV layouts.
+		del q_nope, q_pe, k_pe, compressed_kv
+	else:
+		q_pe = rotary_pos_emb_interleaved_native(q_pe.unsqueeze(0), cos, sin, position_ids.unsqueeze(0), 2).squeeze(0)
+		k_pe = rotary_pos_emb_interleaved_native(k_pe.unsqueeze(0), cos, sin, position_ids.unsqueeze(0), 2).squeeze(0)
 
-	k_pe_flat = k_pe.view(total_tokens, self.qk_rope_head_dim)
-	offload_kv = torch.cat([normed_kv, k_pe_flat], dim=-1)
-	del compressed_kv, k_pe_flat
+		k_pe_flat = k_pe.view(total_tokens, self.qk_rope_head_dim)
+		offload_kv = torch.cat([normed_kv, k_pe_flat], dim=-1)
+		del compressed_kv, k_pe_flat
 
 	# Expand KV
 	kv = _gemm(
@@ -1234,20 +1244,24 @@ def mla_prefill_flashattention3_w8a16_deepgemm_prepacked(
 		normed_kv
 	)
 	kv = kv.view(total_tokens, self.num_heads, self.qk_nope_head_dim + self.v_head_dim)
-	k_nope, value_states = torch.split(
-		kv, [self.qk_nope_head_dim, self.v_head_dim], dim=-1
-	)
+	if _fused_prefill_rope:
+		key_states, value_states = r1_prefill_rope.materialize_key_value(kv, offload_kv)
+		del kv, normed_kv
+	else:
+		k_nope, value_states = torch.split(
+			kv, [self.qk_nope_head_dim, self.v_head_dim], dim=-1
+		)
 
-	# Assemble Q and K
-	query_states = k_pe.new_empty(total_tokens, self.num_heads, self.q_head_dim)
-	query_states[:, :, :self.qk_nope_head_dim] = q_nope
-	query_states[:, :, self.qk_nope_head_dim:] = q_pe
+		# Assemble Q and K
+		query_states = k_pe.new_empty(total_tokens, self.num_heads, self.q_head_dim)
+		query_states[:, :, :self.qk_nope_head_dim] = q_nope
+		query_states[:, :, self.qk_nope_head_dim:] = q_pe
 
-	key_states = k_pe.new_empty(total_tokens, self.num_heads, self.q_head_dim)
-	k_pe = k_pe.view(total_tokens, 1, self.qk_rope_head_dim)
-	key_states[:, :, :self.qk_nope_head_dim] = k_nope
-	key_states[:, :, self.qk_nope_head_dim:] = k_pe
-	del q_nope, q_pe, k_nope, k_pe, kv, normed_kv
+		key_states = k_pe.new_empty(total_tokens, self.num_heads, self.q_head_dim)
+		k_pe = k_pe.view(total_tokens, 1, self.qk_rope_head_dim)
+		key_states[:, :, :self.qk_nope_head_dim] = k_nope
+		key_states[:, :, self.qk_nope_head_dim:] = k_pe
+		del q_nope, q_pe, k_nope, k_pe, kv, normed_kv
 
 	query_states = query_states.contiguous()
 	key_states = key_states.contiguous()
