@@ -1,0 +1,166 @@
+{
+  "schema": "r1-sm103-hotpath-frozen-validation-v1",
+  "scope": "Single valid1440-request8K->2K hot result after full64-request warmup on same8GPU servicePID; not6000formal or whole-model precision qualification. Short384-output trace separate and after measurement.",
+  "baseline": {
+    "TPS": 4258.608349126331,
+    "BCT_seconds": 692.507917664,
+    "prefill_seconds": 228.1,
+    "decode_seconds": 391.0,
+    "phase_switch_seconds": 48.391,
+    "admission_log_bracket_seconds": 22.826,
+    "forward_host_launch_ms": 22.802735710796284
+  },
+  "after": {
+    "TPS": 5029.540673837021,
+    "BCT_seconds": 586.359707824,
+    "prefill_seconds": 208.5,
+    "decode_seconds": 366.6,
+    "phase_switch_seconds": 5.307,
+    "phase_switch_max_rank_seconds": {
+      "decode_to_prefill": 0.721,
+      "prefill_to_decode": 4.586
+    },
+    "admission_log_bracket_seconds": 3.911,
+    "tokenize_collect_seconds": 3.11784,
+    "decode_step_weighted_ms": {
+      "step_ms": 177.5256961406937,
+      "setup_ms": 0.2,
+      "forward_host_launch_ms": 10.321739130434782,
+      "KV_launch_ms": 0.3326819736199316,
+      "readback_wait_ms": 165.18539325842696,
+      "Host_KV_drain_ms": 0.5510503175378603,
+      "bookkeeping_ms": 0.9734733756717148,
+      "current_stream_forward_event_ms": 175.7010258915486
+    },
+    "heartbeat_intervals": 13,
+    "represented_steps": 2047.0,
+    "interval_max_forward_event_ms": [
+      1042.6,
+      174.4,
+      174.5,
+      187.1,
+      188.7,
+      184.9,
+      201.8,
+      195.4,
+      199.3,
+      196.0,
+      203.6,
+      214.7,
+      190.9
+    ]
+  },
+  "change_percent": {
+    "TPS_increase": 18.10291676314517,
+    "BCT_reduction": 15.32808609583326
+  },
+  "counts": {
+    "requests": 1440,
+    "successful": 1440,
+    "errors": 0,
+    "prompt_tokens": 11796480,
+    "completion_tokens": 2949120
+  },
+  "input_identity": {
+    "count": 1440,
+    "unique_prompts_custom_ids": 1440,
+    "source_only_identities_sha256": "bed3133621c0b1030f98f0043071d73666c492300b820856d8d1fcac6026951b",
+    "same_as_SG_tokenization_proof": true,
+    "scope": "Submitted BG raw text hashes and prepared token-ID hashes; runtime usage validated separately."
+  },
+  "CPU_validation": "216integrated contracts passed;25trace/private diagnostic contracts passed",
+  "phase_validation": "phase_contract_verified_NOT_endtoend_result",
+  "diagnostic_trace": {
+    "records": 2560,
+    "ranks": 8,
+    "steps_per_rank": 320,
+    "first_capture_ms": 831.1188658699393,
+    "first_step_wall_max_ms": 1026.48716699332,
+    "ordinary_steps": {
+      "records": 2512,
+      "wall_median_ms": 165.72907101362944,
+      "wall_max_ms": 182.17502068728209,
+      "forward_event_median_ms": 163.84168243408203,
+      "forward_event_max_ms": 180.1903076171875,
+      "outside_forward_segments_median_ms": 0.035742297768592834,
+      "outside_forward_segments_max_ms": 1.0761143639683723
+    },
+    "page_boundary_steps": {
+      "records": 40,
+      "wall_median_ms": 265.3892580419779,
+      "wall_max_ms": 270.468320697546,
+      "forward_event_median_ms": 172.18051147460938,
+      "forward_event_max_ms": 176.20037841796875,
+      "outside_forward_segments_median_ms": 91.64692182093859,
+      "outside_forward_segments_max_ms": 94.36938539147377
+    },
+    "stable_steps": {
+      "records": 2552,
+      "wall_median_ms": 165.74966022744775,
+      "wall_max_ms": 270.468320697546,
+      "forward_event_median_ms": 163.87435150146484,
+      "forward_event_max_ms": 180.1903076171875,
+      "outside_forward_segments_median_ms": 0.03580981865525246,
+      "outside_forward_segments_max_ms": 94.36938539147377
+    },
+    "largest_single_GC_pause_ms": 2.4189790710806847,
+    "GC_generations_observed": [
+      0,
+      1
+    ],
+    "major_faults_total": 0
+  },
+  "actual_KV": {
+    "pages_per_card": 30895,
+    "page_tokens": 64,
+    "tokens_per_card": 1977280,
+    "baseline_pages_per_card": 30987,
+    "running_rows_per_card": 180,
+    "Host_KV_pool_GiB": 1280,
+    "onhold_or_load_rows_in_hot_decode": 0
+  },
+  "limitations": [
+    "Single hot measurement; no repeat-based confidence interval.",
+    "Phase counters include cleanup as designed; tokenization log bracket includes admission work.",
+    "Readback waits forward, not standalone token copy. CUDA-event spans include CPU gaps and peer/dependency waits.",
+    "Previous480-592ms heartbeat maxima lack individual step traces; newstable trace did not reproduce them, so prior exact cause is not proven.",
+    "Boundary trace attributes extra wall to host scheduling before forward; it does not identify every boundary subfunction."
+  ],
+  "publication_checks": {
+    "BatchGen_CPU_contracts": {
+      "passed": 219,
+      "seconds": 32.01
+    },
+    "SGLang_bridge_CPU_contracts": {
+      "passed": 10,
+      "seconds": 0.81
+    },
+    "CXX_copy_coalescer": "passed: exact bytes, ascending/fragmented/reversed/partial/split layouts",
+    "source_freeze_verification": "all530 runtime sources match tested manifest",
+    "published_CPU_runner": {
+      "passed": 219,
+      "seconds": 29.43
+    }
+  },
+  "service_settlement": {
+    "normal_STOP": true,
+    "returncode": 0,
+    "remaining_GPU_compute_processes": 0,
+    "measurement_locks_released": true
+  },
+  "original_evidence_sha256": {
+    "measured1440/receipt.json": "5b5c4480e7b4b91f706d3abd90a7d10ccbf42e128da04325b4a34e91fd82119c",
+    "phase-reuse-validation.json": "54ade818895cae38ed6b4005b6b76ca7c5c3f996f3e13f4e35b383b24492deda",
+    "decode-trace-analysis01.json": "45d63ac286216b0d0a23f6bd3c4b21cf3081ef2ad19dee089d8378afeae86c1f",
+    "performance-summary.json": "46de8c9103a20e5752112166b39975a8c3192f28687def3a7100f62320dd1150",
+    "qualification/rope/result.json": "bb7b854f9d2c359454c310a27256aabc147d6d1751a9eb055c26ba1e36af14d0",
+    "qualification/actual-prefill-AB/result.json": "884138776b210d8b06a407054130a5d81f51e5d5ce1689e1f53c9d5c56391e17",
+    "qualification/decode-metadata/result.json": "77e3488e662fb2c62d2a533909f83a8022c036f4d94c1c57425dfeb82b3f72bb"
+  },
+  "GPU_qualifications": {
+    "fused_RoPE": "6 tensor cases: Q/K/V/offload bitwise equal; no persistent GPU buffers added",
+    "actual_R1_prefill_AB": "layer0 full attention output and offload bitwise equal; 10.181744ms -> 8.483696ms",
+    "fast_decode_metadata": "14 cases: GPU indices and attention output bitwise equal",
+    "phase_reuse": "8 ranks x3 cycles: model/bank identity and generation retained"
+  }
+}
