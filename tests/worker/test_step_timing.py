@@ -284,3 +284,23 @@ def test_heartbeat_text_drops_the_old_labels():
     positions = [text.index(f"{name} ") for name in DECODE_STEP_SPLIT_SEGMENTS]
     assert positions == sorted(positions)
     assert "gpu_fwd_ms=1.0 gpu_fwd_max=1.0 (n=1)" in text
+
+
+def test_optional_trace_callback_keeps_step_identity_and_never_waits():
+    events, calls, samples = [], [], []
+
+    def factory():
+        e = _FakeEvent(calls)
+        events.append(e)
+        return e
+
+    ring = ForwardEventRing(1, factory, on_sample=lambda tag, ms: samples.append((tag, ms)))
+    slot = ring.begin(None, tag=128)
+    ring.end(slot, None)
+    ring.harvest()
+    assert samples == []
+    start, end = _pair(events, slot)
+    start.complete(10.0)
+    end.complete(11.5)
+    ring.harvest()
+    assert samples == [(128, 1.5)]

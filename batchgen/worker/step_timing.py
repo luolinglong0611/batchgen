@@ -111,7 +111,7 @@ class ForwardEventRing:
     pending (ended, not yet harvested).
     """
 
-    def __init__(self, num_slots: int, event_factory: Callable[[], TimingEvent]):
+    def __init__(self, num_slots: int, event_factory: Callable[[], TimingEvent], *, on_sample=None):
         if num_slots <= 0:
             raise ValueError(f"ForwardEventRing needs at least one slot, got {num_slots}")
         self._pairs = [(event_factory(), event_factory()) for _ in range(num_slots)]
@@ -120,6 +120,8 @@ class ForwardEventRing:
         self._sum_ms = 0.0
         self._max_ms = 0.0
         self._count = 0
+        self._on_sample = on_sample
+        self._tags = [None] * num_slots if on_sample is not None else None
 
     @property
     def num_slots(self) -> int:
@@ -133,11 +135,13 @@ class ForwardEventRing:
     def num_pending(self) -> int:
         return len(self._pending)
 
-    def begin(self, stream: Any) -> Optional[int]:
+    def begin(self, stream: Any, *, tag=None) -> Optional[int]:
         """Record a start event in a free slot; ``None`` if the ring is full."""
         if not self._free:
             return None
         slot = self._free.pop()
+        if self._tags is not None:
+            self._tags[slot] = tag
         self._pairs[slot][0].record(stream)
         return slot
 
@@ -161,6 +165,9 @@ class ForwardEventRing:
                 self._count += 1
                 if elapsed_ms > self._max_ms:
                     self._max_ms = elapsed_ms
+                if self._on_sample is not None:
+                    self._on_sample(self._tags[slot], elapsed_ms)
+                    self._tags[slot] = None
                 self._free.append(slot)
             else:
                 still_pending.append(slot)

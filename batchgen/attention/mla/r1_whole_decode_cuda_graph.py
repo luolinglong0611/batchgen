@@ -4,7 +4,7 @@ Never silently falls back. Segmented attention remains a separately selected
 debug path. Metadata planning, CPU coordination, Host appends and sampling stay
 outside capture. No GPU qualification is implied by this source file.
 """
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from datetime import timedelta
 import json
 import logging
@@ -16,6 +16,18 @@ from types import SimpleNamespace
 ENVIRONMENT = "BATCHGEN_R1_WHOLE_DECODE_CUDA_GRAPH"
 COMPARE_ENVIRONMENT = "BATCHGEN_R1_WHOLE_GRAPH_COMPARE"
 _MISSING_BINDING = object()
+
+
+@contextmanager
+def _trace_range(enabled, name):
+    if enabled:
+        import torch
+        torch.cuda.nvtx.range_push("BatchGen.decode." + name)
+    try:
+        yield
+    finally:
+        if enabled:
+            torch.cuda.nvtx.range_pop()
 
 
 def comparison_requested():
@@ -512,13 +524,22 @@ class _WholeRecord:
 
     def replay(self, input_ids, callback):
         import torch
+        started = time.perf_counter()
         self.static_ids.copy_(input_ids)
-        self.graph.replay()
+        copied = time.perf_counter()
+        with _trace_range(getattr(self.owner, "trace_enabled", False), "graph_replay_submit"):
+            self.graph.replay()
+        replayed = time.perf_counter()
         self.replays += 1
-        if self.batch is not None:
-            self.outputs.stage_after_replay(callback, replay_ordinal=self.replays)
+        with _trace_range(getattr(self.owner, "trace_enabled", False), "KV_clone_Host_callbacks"):
+            if self.batch is not None:
+                self.outputs.stage_after_replay(callback, replay_ordinal=self.replays)
+        staged = time.perf_counter()
         self.last_done = torch.cuda.Event()
         self.last_done.record(torch.cuda.current_stream(input_ids.device))
+        self.last_timing_ms = {"input_ids_staging": (copied - started) * 1000,
+                              "graph_replay_submit": (replayed - copied) * 1000,
+                              "KV_clone_Host_callbacks": (staged - replayed) * 1000}
         return self.output
 
 
@@ -539,6 +560,8 @@ class R1WholeDecodeState:
         self.compared_nonzero_rows = False
         self.diagnostic_eager_passes = 0
         self.weight_guard = None
+        self.last_step_timing_ms = {}
+        self.trace_enabled = os.environ.get("BATCHGEN_R1_DECODE_TRACE", "0") == "1"
 
     def _weight_guard_for(self, model):
         if not fast_weight_guard_requested():
@@ -546,7 +569,6 @@ class R1WholeDecodeState:
         if self.weight_guard is None:
             self.weight_guard = CapturedWeightSignature(model)
         return self.weight_guard
-
 
     def compare_first_nonzero_replay(self, worker, record):
         """All EP ranks join one eager pass when any rank needs its first check.
@@ -610,7 +632,8 @@ class R1WholeDecodeState:
         if record is not None and record.last_done is not None:
             _wait_event(record.last_done)
         self.record = None
-        # Release tensor owners along with their captured graph.
+        # The guard owns original and prepared tensors. Release it with the
+        # graph so non-reused phase models/KV can actually be reclaimed.
         self.weight_guard = None
         self.invalidations += 1
         logging.info("[R1_WHOLE_GRAPH_INVALIDATE] reason=%s generation=%d", reason, self.invalidations)
@@ -620,6 +643,10 @@ class R1WholeDecodeState:
         from batchgen.models.wrappers.attention import AttnWrapperBase
         from .r1_decode_cuda_graph import forward_scope
         error, batch, signature, pool, callback = None, None, None, None, None
+        self.trace_enabled = bool(getattr(worker, "_r1_decode_trace_active",
+            os.environ.get("BATCHGEN_R1_DECODE_TRACE", "0") == "1"))
+        timing = {}
+        run_started = time.perf_counter()
         with ExitStack() as scopes:
             try:
                 validate_profile(model_identifier=worker.huggingface_ckpt_name,
@@ -644,8 +671,13 @@ class R1WholeDecodeState:
                     raise RuntimeError("All 58 routed layers must use the actual DeepEP LL adapter")
                 if pool.phase_configurations < 1:
                     raise RuntimeError("R1 LL pool has not completed a decode phase configuration")
-                batch = scopes.enter_context(forward_scope(model, manager, gids, lengths,
-                    context_cap=context_cap, micro_batch_size=micro_batch_size))
+                metadata_started = time.perf_counter()
+                with _trace_range(self.trace_enabled, "attention_metadata"):
+                    batch = scopes.enter_context(forward_scope(model, manager, gids, lengths,
+                        context_cap=context_cap, micro_batch_size=micro_batch_size))
+                timing["attention_metadata"] = (time.perf_counter() - metadata_started) * 1000
+                if batch is not None:
+                    timing.update(batch.last_prepare_timing_ms)
                 if input_ids.shape != (len(gids), 1) or input_ids.dtype != torch.int64:
                     raise ValueError("Whole-decode input IDs must match the actual local [rows,1] metadata")
                 callback = AttnWrapperBase.kv_append_callback
@@ -653,12 +685,19 @@ class R1WholeDecodeState:
                     raise RuntimeError("Whole-decode real replay requires the existing Host KV callback")
                 pool.external_valid_rows = True
                 pool.set_valid_rows(len(gids))
-                signature = _signature(worker, model, manager, batch, pool,
-                                       input_ids, self.invalidations, self._weight_guard_for(model))
+                signature_started = time.perf_counter()
+                with _trace_range(self.trace_enabled, "signature_guards"):
+                    signature = _signature(worker, model, manager, batch, pool,
+                                           input_ids, self.invalidations, self._weight_guard_for(model))
+                timing["signature_guards"] = (time.perf_counter() - signature_started) * 1000
             except Exception as exc:
                 error = type(exc).__name__ + ": " + str(exc)
             changed = self.record is None or self.record.signature != signature
-            rebuild = self.coordinator.agree("metadata-and-signature", changed=changed, error=error)
+            agreed_started = time.perf_counter()
+            with _trace_range(self.trace_enabled, "Gloo_agreement"):
+                rebuild = self.coordinator.agree("metadata-and-signature", changed=changed, error=error)
+            timing["Gloo_agreement"] = (time.perf_counter() - agreed_started) * 1000
+            rebuild_started = time.perf_counter()
             if rebuild:
                 self.invalidate(reason="all-rank-signature-agreement")
                 for layer in model.model.layers:
@@ -683,7 +722,12 @@ class R1WholeDecodeState:
                 self.captures += 1
                 logging.info("[R1_WHOLE_GRAPH_CAPTURE] rank=%d captures=%d rows=%d MoE=DeepEP_LL phase=%d",
                     worker.rank, self.captures, len(gids), pool.phase_configurations)
+            timing["capture_rebuild"] = (time.perf_counter() - rebuild_started) * 1000 if rebuild else 0.0
             result = self.record.replay(input_ids, callback)
+            timing.update(self.record.last_timing_ms)
+            timing["whole_decode_host_total"] = (time.perf_counter() - run_started) * 1000
+            timing["graph_rebuilt"] = int(rebuild)
+            self.last_step_timing_ms = timing
             self.total_replays += 1
             if self.compare_enabled:
                 self.compare_first_nonzero_replay(worker, self.record)

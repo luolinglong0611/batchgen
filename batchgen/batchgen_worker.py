@@ -18716,6 +18716,9 @@ class BatchGenWorker:
 		# this decode round: a hot reload rebinds methods on the live worker,
 		# so an accumulator kept on ``self`` could outlive a slot-layout change.
 		_step_split = new_decode_step_split()
+		from batchgen.worker.decode_trace import DecodeStepTrace
+		_step_trace = DecodeStepTrace.from_env(rank=self.rank, rows=len(batch))
+		self._r1_decode_trace_active = _step_trace is not None
 		# Device-side time of the forward+sample segment from reusable timing
 		# events, so the heartbeat reports real GPU forward time next to the
 		# CPU split. The ring never makes the host wait (see
@@ -18727,6 +18730,7 @@ class BatchGenWorker:
 		_fwd_ring = ForwardEventRing(
 			FORWARD_EVENT_RING_SLOTS,
 			lambda: torch.cuda.Event(enable_timing=True),
+			on_sample=_step_trace.on_gpu_sample if _step_trace is not None else None,
 		)
 
 		# Main decode loop — enable decode watchdog for monitoring
@@ -18746,6 +18750,9 @@ class BatchGenWorker:
 
 			local_iteration += 1
 			self._cumulative_decode_iterations += 1
+			_trace_page_boundary = False
+			if _step_trace is not None:
+				_step_trace.begin(self._cumulative_decode_iterations, len(batch))
 
 			# Feed watchdogs to prevent timeout during long decoding
 			self.feed_watchdog()
@@ -18783,6 +18790,7 @@ class BatchGenWorker:
 
 			# Page boundary check - use DECISION_INTERVAL (configurable via BATCHGEN_DECISION_FREQUENCY_PAGES)
 			if force_host_boundary or local_iteration - last_boundary >= self.DECISION_INTERVAL:
+				_trace_page_boundary = True
 				last_boundary = local_iteration
 				force_host_boundary = False
 
@@ -18961,6 +18969,8 @@ class BatchGenWorker:
 						f"batch_size={len(batch)}, new_tokens.shape={new_tokens.shape}"
 					)
 			
+			if _step_trace is not None:
+				_step_trace.mark("setup")
 			# Forward pass
 			forward_start = time.perf_counter()
 
@@ -18995,10 +19005,13 @@ class BatchGenWorker:
 							f"{max_tokens} for {seq.uuid[:8]}"
 						)
 
+			if _step_trace is not None:
+				_step_trace.mark("forward_submit")
 			_split_t0 = time.perf_counter()
 			# Start marker of this step's device forward+sample time. Takes a
 			# free ring slot or skips timing this step; never waits.
-			_fwd_slot = _fwd_ring.begin(torch.cuda.current_stream(self.torch_device))
+			_fwd_slot = _fwd_ring.begin(torch.cuda.current_stream(self.torch_device),
+				tag=self._cumulative_decode_iterations if _step_trace is not None else None)
 			with torch.inference_mode():
 				if batch:
 					# Collect context lengths with invariant validation
@@ -19679,6 +19692,8 @@ class BatchGenWorker:
 			_split_t1 = time.perf_counter()
 			# End marker, queued on the same stream ahead of the token copy below.
 			_fwd_ring.end(_fwd_slot, torch.cuda.current_stream(self.torch_device))
+			if _step_trace is not None:
+				_step_trace.mark("KV_submit")
 
 			# P1: Non-blocking GPU→CPU token transfer via pinned memory. Record the
 			# exact token-readback boundary before launching host-KV copies on their
@@ -19695,6 +19710,8 @@ class BatchGenWorker:
 			# then drains the append tasks below.
 			self._flush_deferred_kv_to_host()
 			_split_t2 = time.perf_counter()
+			if _step_trace is not None:
+				_step_trace.mark("token_wait")
 			# --- The measured production wedge point, made pollable ---
 			# This was a blocking `_new_tokens_ready.synchronize()`.  A rank
 			# whose peer died mid-decode blocks there below Python and runs
@@ -19705,6 +19722,8 @@ class BatchGenWorker:
 			# unarmed, and otherwise polls the event so the flag can be seen.
 			_decode_wait = self._wait_decode_tokens(_new_tokens_ready)
 			_split_t3 = time.perf_counter()
+			if _step_trace is not None:
+				_step_trace.mark("Host_KV_drain")
 
 			# --- Decode-step teardown boundary (the abandoned token wait) ---
 			# The wait gave up on an event that may never fire, so NOTHING this
@@ -19776,6 +19795,8 @@ class BatchGenWorker:
 				return decode_uuids, batch
 
 			_split_t4 = time.perf_counter()
+			if _step_trace is not None:
+				_step_trace.mark("bookkeeping")
 			# One host read of this step's sampled tokens for the whole
 			# microbatch, replacing two `.item()` calls per row below.
 			new_token_ids = _new_tokens_pinned[:bs].reshape(-1).tolist()
@@ -19867,6 +19888,13 @@ class BatchGenWorker:
 			# Non-blocking harvest of finished forward timing pairs; elapsed
 			# time is read only from pairs whose two events already completed.
 			_fwd_ring.harvest()
+			if _step_trace is not None:
+				_step_trace.finish(
+					forward_marks=(forward_start, _split_t0, _split_t1, _split_t2, _split_t3, _split_t4, _split_t5),
+					graph_timing=getattr(getattr(self, "_r1_whole_decode_state", None), "last_step_timing_ms", None),
+					contexts=[seq.current_context_length for seq in batch_sequences],
+					page_boundary=_trace_page_boundary,
+				)
 
 			# Decode timing ablation (BATCHGEN_DECODE_TIMING=1)
 			from batchgen.timing import get_decode_timer
@@ -19876,6 +19904,8 @@ class BatchGenWorker:
 				_dt.reset()
 
 		# Cleanup
+		if _step_trace is not None:
+			_step_trace.flush()
 		self._wait_pending_kv_append_tasks(sync_distributed_errors=True)
 		if pending_async_task is not None:
 			pending_async_task.wait()
