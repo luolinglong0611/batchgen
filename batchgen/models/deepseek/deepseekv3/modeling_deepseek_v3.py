@@ -1917,8 +1917,10 @@ class DeepseekV3MoE_Decoding_FP8(nn.Module):
 		hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
 		identity = hidden_states
 
-		# Select execution path based on config
-		if getattr(self, 'enable_ep_offloading', False):
+		# LL is explicit and fail-loud; no NCCL fallback for this opt-in.
+		if getattr(self, 'r1_deepep_adapter', None) is not None:
+			out = self.r1_deepep_adapter(hidden_states)
+		elif getattr(self, 'enable_ep_offloading', False):
 			# Use loop-based execution for EP with offloading (dynamic weight loading)
 			out = self.moe_infer_loop_with_offloading(hidden_states)
 		elif os.getenv("BATCHGEN_ENABLE_ALL_TO_ALL","0") == "1":

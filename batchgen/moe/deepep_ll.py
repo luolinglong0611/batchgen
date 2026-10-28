@@ -25,7 +25,7 @@ Build capability
 The compile-time limits above are not introspectable from Python, so
 ``deepep_unavailable_reason()`` checks what the import actually provides (the
 module, the ``Buffer`` methods, the keyword arguments we pass, the SM90 compile
-flag, ``topk_idx_t``) and validates the requested shape against the capability
+flag) and validates the requested shape against the capability
 table of the build in hand -- upstream limits by default, widened when the K3
 build marker is present. A caller that names no shape gets the legacy K3
 contract: the patched build is required, because an upstream wheel imports
@@ -99,8 +99,8 @@ def _probe_capability() -> Tuple[Optional[DeepEPCapability], Optional[str]]:
                  "get_low_latency_rdma_size_hint"):
         if not hasattr(buffer_cls, name):
             return None, f"deep_ep.Buffer has no {name}"
-    if getattr(deep_ep, "topk_idx_t", None) is None:
-        return None, "deep_ep does not export topk_idx_t"
+    # Official v1.2.1 exports no topk_idx_t alias. LL uses torch.int64
+    # IDs, enforced by its public call contract and the C++ dtype assertion.
 
     import inspect
 

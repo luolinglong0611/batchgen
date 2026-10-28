@@ -4407,6 +4407,22 @@ class BatchGenWorker:
 			# force-enable) so _warmup_cuda_graphs() reaches _setup_cuda_graphs().
 			self.engine_config.Basic_Config.enable_cuda_graphs = True
 
+		# R1's separately opt-in segmented attention graphs own their capture
+		# path; they are not the GLM/GPT-OSS whole-model adapter.
+		from batchgen.attention.mla.r1_decode_cuda_graph import validate_profile as _r1_graph_profile
+		if _r1_graph_profile(
+			model_identifier=self.huggingface_ckpt_name,
+			enabled=getattr(self.args, "enable_cuda_graph", False),
+			disabled=getattr(self.args, "disable_cuda_graphs", False),
+		):
+			self.engine_config.Basic_Config.enable_cuda_graphs = True
+
+		from batchgen.attention.mla.r1_whole_decode_cuda_graph import validate_profile as _r1_whole_profile
+		_r1_whole_profile(model_identifier=self.huggingface_ckpt_name,
+			enabled=getattr(self.args, "enable_cuda_graph", False),
+			disabled=getattr(self.args, "disable_cuda_graphs", False),
+			deepep=getattr(self.args, "enable_deepep", False))
+
 		# Set EP offloading config from command-line args
 		self.engine_config.EP_Config.enable_offloading = self.args.enable_ep_with_offloading
 		self.engine_config.EP_Config.offloading_ratio = self.args.ep_offloading_ratio
@@ -16960,6 +16976,14 @@ class BatchGenWorker:
 		Called from generate() after model and GPU KV manager are ready.
 		Only captures graphs for supported models (currently GPT-OSS-120B).
 		"""
+		from batchgen.attention.mla.r1_decode_cuda_graph import requested as _r1_graph_requested
+		if _r1_graph_requested():
+			from batchgen.attention.mla.r1_whole_decode_cuda_graph import requested as _r1_whole_requested
+			if _r1_whole_requested():
+				logging.info("[R1_WHOLE_GRAPH] coordinated full decode + DeepEP LL capture deferred to prepared first batch")
+			else:
+				logging.info("[R1_ATTN_GRAPH] capture deferred to first real layer inputs; MoE outside attention graph")
+			return
 		# Model guard: only capture for supported models
 		# Phase C: layer / MoE / DSA / DSA-full segmented graph modes are retired
 		# (predicate functions return False); only the whole-model graph remains
@@ -17159,8 +17183,28 @@ class BatchGenWorker:
 		if (
 			getattr(getattr(self.model, "config", None), "model_type", None) == "deepseek_v3"
 			and AttnWrapperBase.gpu_paged_kv_manager is not None
-			and Attn_Wrapper.position_ids.numel() > 0
+			and (Attn_Wrapper.position_ids.numel() > 0
+				or os.environ.get("BATCHGEN_R1_DECODE_CUDA_GRAPH", "0") == "1")
 		):
+			from batchgen.attention.mla.r1_decode_cuda_graph import requested as _r1_graph_requested
+			if _r1_graph_requested():
+				from batchgen.attention.mla.r1_whole_decode_cuda_graph import requested as _r1_whole_requested
+				if _r1_whole_requested():
+					from batchgen.attention.mla.r1_whole_decode_cuda_graph import run_whole_decode
+					return run_whole_decode(self, new_tokens)
+				from batchgen.attention.mla.r1_decode_cuda_graph import forward_scope as _r1_graph_scope
+				from batchgen.r1_alignment_controls import effective_context_limit
+				_manager = AttnWrapperBase.gpu_paged_kv_manager
+				_gids = [int(gid) for gid in _manager._gpu_page_table_manager.slot_to_seq_id]
+				_lengths = [int(self.global_batch.get_sequence_by_global_idx(gid).current_context_length) for gid in _gids]
+				_context_cap = effective_context_limit(
+					int(self.model.config.max_position_embeddings), self.huggingface_ckpt_name)
+				_first_wrapper = self.model.model.layers[0].self_attn
+				with _r1_graph_scope(self.model, _manager, _gids, _lengths,
+						context_cap=_context_cap,
+						micro_batch_size=int(_first_wrapper.decode_attn_micro_batch_size)):
+					return self.model(new_tokens, attention_mask=Attn_Wrapper.attention_mask,
+						position_ids=Attn_Wrapper.position_ids, use_cache=False)
 			from batchgen.attention.mla.decode_position_validation import mla_decode_position_scope
 			with mla_decode_position_scope(Attn_Wrapper.position_ids):
 				return _forward()
@@ -21068,6 +21112,11 @@ class BatchGenWorker:
 		2. Deletes model reference directly
 		3. Releases memory back to CUDA allocator
 		"""
+		# A whole-decode record strongly owns model/cache/weight storage. Drop
+		# it before model deletion while retaining the CPU control group.
+		_r1_whole_state = getattr(self, "_r1_whole_decode_state", None)
+		if _r1_whole_state is not None and _r1_whole_state.record is not None:
+			_r1_whole_state.invalidate(reason="decode_model_release")
 		if not hasattr(self, 'model') or self.model is None:
 			return
 

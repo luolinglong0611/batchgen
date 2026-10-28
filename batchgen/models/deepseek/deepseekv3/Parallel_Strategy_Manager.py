@@ -313,6 +313,10 @@ class DeepseekV3ParallelStrategyManager:
 		- persistent=True: weights pre-loaded on GPU
 		- persistent=False: weights loaded from buffer each forward
 		"""
+		# Phase/model rebuild is outside the timed decode loop. Drain work
+		# before old expert tensors/graphs can lose their backing storage.
+		if getattr(self, "_r1_deepep_pool", None) is not None:
+			torch.cuda.synchronize(self.engine_config.Basic_Config.device_torch)
 		self.loaded_model_config.phase = "decode"
 		self.loaded_model_config._attn_implementation = "eager"
 		self.model = None
@@ -488,6 +492,8 @@ class DeepseekV3ParallelStrategyManager:
 		# _init_decoding_padding_bsz will also check BATCHGEN_MAX_RANK_BSZ env var
 		effective_padding_bsz = padding_bsz if padding_bsz is not None else 128
 		self._init_decoding_padding_bsz(effective_padding_bsz)
+		if self.engine_config.Module_Batching_Config.r1_deepep_ll:
+			self._init_r1_deepep()
 
 		# Initialize All-to-All comms if enabled (used for multi-node or benchmark scenarios)
 		if os.getenv("BATCHGEN_ENABLE_ALL_TO_ALL", "0") == "1":
@@ -500,6 +506,39 @@ class DeepseekV3ParallelStrategyManager:
 			from scripts.r1_reproduction.r1_full_model_trace import register_model_hooks
 			register_model_hooks(self.model, self.rank, self.world_size, "decode")
 		return self.model, self.weight_copy_task
+
+	def _init_r1_deepep(self):
+		"""Private candidate: create one static LL workspace before graph capture."""
+		if self.enable_ep_offloading:
+			raise RuntimeError("R1 DeepEP LL requires resident local experts")
+		if os.getenv("BATCHGEN_ENABLE_ALL_TO_ALL", "0") == "1":
+			raise RuntimeError("Choose DeepEP LL or legacy PPLX exchange, not both")
+		ep = self.engine_config.EP_Config
+		if (not ep.enable or self.engine_config.Basic_Config.attn_mode != 3 or
+			ep.num_local_expert_per_layer != 256 // self.world_size):
+			raise RuntimeError("R1 DeepEP LL requires DP attention and fully resident EP sharding")
+		from .deepep_decode import R1DeepEPDecodePool, R1DeepEPDecodeAdapter
+		moes = [(i, self.model.model.layers[i].mlp) for i in range(
+			self.loaded_model_config.first_k_dense_replace,
+			self.model_config.num_hidden_layers)]
+		capacity = max(m.max_num_tokens_per_rank for _, m in moes)
+		pool = getattr(self, "_r1_deepep_pool", None)
+		if pool is None:
+			pool = R1DeepEPDecodePool(
+				dist.group.WORLD, max_tokens_per_rank=capacity,
+				hidden=self.loaded_model_config.hidden_size,
+				intermediate=self.loaded_model_config.moe_intermediate_size,
+				num_experts=self.loaded_model_config.n_routed_experts,
+				topk=self.loaded_model_config.num_experts_per_tok,
+				device=self.engine_config.Basic_Config.device_torch)
+			self._r1_deepep_pool = pool
+		elif capacity > pool.capacity:
+			raise RuntimeError("R1 LL capacity cannot grow after capture; restart with a larger cap")
+		pool.begin_phase()
+		for layer_idx, moe in moes:
+			moe.r1_deepep_adapter = R1DeepEPDecodeAdapter(moe, pool, layer_idx=layer_idx)
+		logging.info("[R1-DEEPEP-LL] BF16 dispatch/combine; capacity=%d, EP=%d, experts=%d, phase=%d",
+			pool.capacity, pool.world_size, pool.num_experts, pool.phase_configurations)
 
 	def _init_decoding_padding_bsz(self, padding_bsz):
 		"""
@@ -536,6 +575,9 @@ class DeepseekV3ParallelStrategyManager:
 		Args:
 			num_tokens_per_rank: The max batch size across all ranks for this page
 		"""
+		pool = getattr(self, "_r1_deepep_pool", None)
+		if pool is not None and num_tokens_per_rank > pool.capacity:
+			raise RuntimeError("R1 LL batch exceeds fixed process capacity")
 		for layer_idx in range(
 			self.loaded_model_config.first_k_dense_replace,
 			self.model_config.num_hidden_layers,

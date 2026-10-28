@@ -162,10 +162,11 @@ def test_missing_buffer_method_is_refused(fake_deep_ep):
     assert reason == "deep_ep.Buffer has no low_latency_combine"
 
 
-def test_missing_topk_idx_dtype_is_refused(fake_deep_ep):
-    fake_deep_ep(k3_marker=True, topk_idx_t=None)
-    reason = deepep_ll.deepep_unavailable_reason(**GLM52)
-    assert reason is not None and "topk_idx_t" in reason
+def test_official_v121_without_nonpublic_topk_alias_is_supported(fake_deep_ep):
+    module = fake_deep_ep(k3_marker=False)
+    del module.topk_idx_t
+    # Official v1.2.1 never exports this alias; its LL API uses int64 IDs.
+    assert deepep_ll.deepep_unavailable_reason(**GLM52) is None
 
 
 def test_non_sm90_build_is_refused(fake_deep_ep):

@@ -124,6 +124,10 @@ def set_basic_config(engine_config: EngineConfig, input_arguments):
 			f"offloading_ratio={engine_config.EP_Config.offloading_ratio}"
 		)
 
+	engine_config.Module_Batching_Config.r1_deepep_ll = bool(
+		input_arguments.get("enable_deepep", False)
+	)
+
 	return engine_config
 
 

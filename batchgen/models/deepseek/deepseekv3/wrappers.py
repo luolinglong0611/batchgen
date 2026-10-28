@@ -249,6 +249,8 @@ class DeepSeekAttnWrapper(AttnWrapperBase):
 
     def _register_fp8_weights(self):
         """Cache FP8 attention weights for MLA architecture."""
+        from batchgen.attention.mla.r1_decode_cuda_graph import release_attention_graph
+        release_attention_graph(self)
         clear_mla_decode_weight_cache(self.module)
         self.fp8_q_a_proj = self.module.q_a_proj.weight.data
         self.fp8_q_b_proj = self.module.q_b_proj.weight.data
@@ -268,16 +270,22 @@ class DeepSeekAttnWrapper(AttnWrapperBase):
 
     def apply_weights(self, weights_dict):
         # Base loading uses .data assignments, which may bypass version bumps.
+        from batchgen.attention.mla.r1_decode_cuda_graph import release_attention_graph
+        release_attention_graph(self)
         clear_mla_decode_weight_cache(self.module)
         return super().apply_weights(weights_dict)
 
     def clear_weights(self):
+        from batchgen.attention.mla.r1_decode_cuda_graph import release_attention_graph
+        release_attention_graph(self)
         clear_mla_decode_weight_cache(self.module)
         return super().clear_weights()
 
     def _apply(self, fn, recurse=True):
         # Plain cached tensors are not registered buffers; release them before
         # nn.Module.to()/cuda()/dtype conversion can move the source weights.
+        from batchgen.attention.mla.r1_decode_cuda_graph import release_attention_graph
+        release_attention_graph(self)
         clear_mla_decode_weight_cache(self.module)
         return super()._apply(fn, recurse=recurse)
 
@@ -310,6 +318,12 @@ class DeepSeekAttnWrapper(AttnWrapperBase):
             expected unpacking.
         """
         if self.prepack_mode:
+            # Keep at most one layer's KV offloads live. Unlike discarding the
+            # native shared_future (which blocks in its final destructor), an
+            # explicit retirement is visible and propagates native exceptions.
+            AttnWrapperBase.retire_pending_prefill_offloads_before_layer(
+                self.layer_idx, device=hidden_states.device,
+            )
             # Prepack mode: hidden_states is [1, total_tokens, hidden_dim]
             # Prepacked attention expects [total_tokens, hidden_dim]
             hidden_states_2d = hidden_states.squeeze(0)
@@ -359,6 +373,8 @@ class DeepSeekAttnWrapper(AttnWrapperBase):
         cu_seqlens = self.prepack_cu_seqlens
         num_sequences = self.prepack_num_sequences
         global_sequence_ids = self.cur_batch
+        if num_sequences:
+            AttnWrapperBase.pin_prefill_offload_tensor(offload_kv, self.layer_idx)
 
         for seq_idx in range(num_sequences):
             start_idx = cu_seqlens[seq_idx].item()
@@ -374,13 +390,14 @@ class DeepSeekAttnWrapper(AttnWrapperBase):
             seq_global_id = [global_sequence_ids[seq_idx]]
 
             # MLA has no V (K contains compressed KV + k_pe)
-            self.core_engine.host_paged_kv_worker_view.async_offload_layer_kv_to_host(
+            task = self.core_engine.host_paged_kv_worker_view.async_offload_layer_kv_to_host(
                 layer_idx=self.layer_idx,
                 sequence_ids=seq_global_id,
                 k_tensor=seq_kv,
                 v_tensor=None,
                 sequence_lengths=[seq_len],
             )
+            AttnWrapperBase.track_prefill_offload_task(task, self.layer_idx)
 
     def _forward_decode(self, hidden_states: torch.Tensor, **kwargs) -> Tuple:
         """Decode forward using FlashMLA backend.
@@ -399,6 +416,10 @@ class DeepSeekAttnWrapper(AttnWrapperBase):
         Returns:
             Tuple of (attn_output, past_key_states, scale) for KV cache update.
         """
+        from batchgen.attention.mla.r1_decode_cuda_graph import requested, run_attention_graph
+        if requested():
+            return run_attention_graph(self, hidden_states)
+
         # Get class-level decode state
         past_key_states = AttnWrapperBase.past_key_states
         attention_mask = AttnWrapperBase.attention_mask

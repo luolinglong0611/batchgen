@@ -45,6 +45,14 @@ class DeepSeekV3Planner(BasePlanner):
         requested = os.environ.get(name, "0")
         if requested not in ("0", "1"):
             raise ValueError(f"{name} must be 0 or 1")
+        ll_requested = bool(getattr(
+            self.config.Module_Batching_Config, "r1_deepep_ll", False))
+        if ll_requested and self.world_size <= 8:
+            if self.world_size != 8 or requested != "1":
+                raise ValueError(
+                    "R1 --enable-deepep on one node requires world_size=8 and "
+                    f"{name}=1; legacy decode is not a DeepEP LL fallback"
+                )
         if requested == "0":
             return
 

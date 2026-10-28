@@ -108,6 +108,8 @@ class ModuleBatchingConfig:
     # Kimi-K3 slice 3: DeepEP low-latency EP exchange in the decode graph (needs the
     # K3 DeepEP build + NVSHMEM env; planner-set, see batchgen/moe/deepep_ll.py).
     k3_deepep_ll: bool = False
+    # R1 opt-in: BF16 DeepEP-v1 low-latency transport, resident EP experts.
+    r1_deepep_ll: bool = False
     prepack_row_capacity: Optional[int] = None  # Token budget per packed row (None = no limit)
     # In-wave prefix pool: prefill HBM kept for one prepacked forward; the
     # rest of free prefill HBM becomes the pool (0 = pool off). Planner-set.

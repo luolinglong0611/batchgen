@@ -404,7 +404,15 @@ def _selected_contract(model_type: str, server_args: object) -> RuntimeContract:
         raise RuntimePreflightError("The R1 SM103 server profile requires both explicit attention and FP8 compatibility selections")
     if not torch.cuda.is_available() or tuple(torch.cuda.get_device_capability()) != (10, 3):
         raise RuntimePreflightError("The explicit R1 compatibility profile requires actual CUDA capability 10.3")
-    if (not getattr(server_args, "disable_cuda_graphs", False)
+    from batchgen.attention.mla.r1_decode_cuda_graph import requested as r1_graph_requested, validate_profile
+    if r1_graph_requested():
+        try:
+            validate_profile(model_identifier=server_args.model,
+                             enabled=getattr(server_args, "enable_cuda_graph", False),
+                             disabled=getattr(server_args, "disable_cuda_graphs", False))
+        except ValueError as exc:
+            raise RuntimePreflightError(str(exc)) from exc
+    elif (not getattr(server_args, "disable_cuda_graphs", False)
             or getattr(server_args, "enable_cuda_graph", False)):
         raise RuntimePreflightError("The R1 compatibility profile requires explicit --disable-cuda-graphs")
     if getattr(server_args, "kv_dtype", None) != "bfloat16":

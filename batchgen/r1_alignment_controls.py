@@ -64,7 +64,10 @@ def fixed_r1_gpu_kv_contract(*, model_identifier, kv_dtype, graphs_enabled,
     if tokens % 64 or tokens >= 2**31:
         raise ValueError("Fixed R1 GPU KV tokens must be a page64 multiple below int32 range")
     if graphs_enabled is not False:
-        raise ValueError("Fixed R1 GPU KV requires CUDA graphs explicitly OFF")
+        from batchgen.attention.mla.r1_decode_cuda_graph import validate_profile as r1_graph_profile
+        if graphs_enabled is not True or not r1_graph_profile(
+                model_identifier=model_identifier, enabled=True, disabled=False):
+            raise ValueError("Fixed R1 GPU KV requires CUDA graphs explicitly OFF or the explicit R1 graph profile")
     if str(kv_dtype) not in ("bfloat16", "torch.bfloat16"):
         raise ValueError("Fixed R1 GPU KV requires BF16 KV")
     if (not isinstance(device_capability, (tuple, list))
