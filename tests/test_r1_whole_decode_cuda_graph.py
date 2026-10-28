@@ -69,6 +69,102 @@ def test_actual_token_and_metadata_bytes_do_not_require_recapture():
     assert signature(args) == before
 
 
+def test_flat_weight_guard_reuses_full_signature_and_checks_normal_mutation(monkeypatch):
+    model = fixture_signature()[1]
+    guard = module.CapturedWeightSignature(model)
+    key = guard.signature(model)
+    assert guard.refreshes == 1
+    original = module._weight_signature
+    def unexpected_scan(model):
+        raise AssertionError("Stable step must not rebuild the full model signature")
+    monkeypatch.setattr(module, "_weight_signature", unexpected_scan)
+    assert guard.signature(model) is key
+    monkeypatch.setattr(module, "_weight_signature", original)
+    with torch.no_grad():
+        model.lm_head.weight.add_(1)
+    assert guard.signature(model) != key
+    assert guard.refreshes == 2
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda m: setattr(m.lm_head, "weight", torch.nn.Parameter(torch.zeros(2, 2))),
+    lambda m: setattr(m.lm_head.weight, "data", torch.ones(2, 2)),
+    lambda m: setattr(m.lm_head.weight, "data", m.lm_head.weight.data.t()),
+    lambda m: setattr(m, "_r1_weight_generation", 2),
+    lambda m: setattr(m.model.layers[0].self_attn.module, "q_a_proj", types.SimpleNamespace(weight=torch.ones(2, 2))),
+    lambda m: setattr(m.model.layers[0].self_attn.module, "_mla_decode_weight_cache_entry", (None, torch.ones(2, 2))),
+])
+def test_flat_weight_guard_detects_binding_layout_epoch_and_cache_changes(mutate):
+    model = fixture_signature()[1]
+    guard = module.CapturedWeightSignature(model)
+    before = guard.signature(model)
+    mutate(model)
+    assert guard.signature(model) != before
+
+
+def test_flat_weight_guard_detects_prepared_bank_and_native_api_replacement():
+    model = fixture_signature()[1]
+    attn = model.model.layers[0].self_attn.module
+    item = types.SimpleNamespace(weight=torch.ones(2, 2), scale=torch.ones(2, 2))
+    attn._r1_native_gemm_weights = [item]
+    bank = [torch.ones(2, 2) for _ in range(4)]
+    mlp = model.model.layers[3].mlp
+    mlp.r1_deepep_adapter = types.SimpleNamespace(graph_weight_tensors=lambda: tuple(bank))
+    mlp.shared_experts = types.SimpleNamespace()
+    guard = module.CapturedWeightSignature(model)
+    key = guard.signature(model)
+    assert guard.signature(model) is key
+    item.scale.add_(1)
+    changed = guard.signature(model)
+    assert changed != key
+    item.weight = item.weight.clone()
+    again = guard.signature(model)
+    assert again != changed
+    bank[0] = bank[0].clone()
+    assert guard.signature(model) != again
+
+
+def test_flat_weight_guard_detects_parameter_registration_replacement():
+    model = fixture_signature()[1]
+    model.lm_head = torch.nn.Linear(2, 2, bias=False)
+    guard = module.CapturedWeightSignature(model)
+    key = guard.signature(model)
+    model.lm_head.weight = torch.nn.Parameter(torch.zeros(2, 2))
+    assert guard.signature(model) != key
+
+
+@pytest.mark.parametrize("name", ["weight", "e_score_correction_bias"])
+@pytest.mark.parametrize("replace", [False, True])
+def test_gate_weights_and_correction_bias_are_guarded_in_full_and_cached_signatures(name, replace):
+    model = fixture_signature()[1]
+    gate = types.SimpleNamespace(weight=torch.nn.Parameter(torch.ones(2, 2)),
+                                 e_score_correction_bias=torch.nn.Parameter(torch.ones(2)))
+    model.model.layers[3].mlp.gate = gate
+    guard = module.CapturedWeightSignature(model)
+    key = guard.signature(model)
+    full_before = module._weight_signature(model)
+    if replace:
+        setattr(gate, name, torch.nn.Parameter(getattr(gate, name).detach().clone()))
+    else:
+        with torch.no_grad():
+            getattr(gate, name).add_(1)
+    assert module._weight_signature(model) != full_before
+    assert guard.signature(model) != key
+
+
+def test_prepared_ordinary_shared_weight_and_scale_updates_invalidate_graph():
+    args = fixture_signature()
+    entry = types.SimpleNamespace(weight=torch.ones(2, 2),
+                                  scale=torch.zeros(2, 1, dtype=torch.int32))
+    args[1].model.layers[0].mlp._r1_native_gemm_weights = [entry]
+    before = signature(args)
+    entry.weight.add_(1)
+    changed = signature(args)
+    assert changed != before
+    entry.scale.add_(1)
+    assert signature(args) != changed
+
+
 @pytest.mark.parametrize("mutate", [
     lambda a: setattr(a[3], "plan_identity", ((1, 2, 4),)),
     lambda a: setattr(a[4], "phase_configurations", 2),

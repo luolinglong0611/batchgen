@@ -58,6 +58,42 @@ class FakeRecord:
 
 
 class GraphMetadataContracts(unittest.TestCase):
+    def test_fast_reservation_cache_reuses_and_invalidates_on_page_changes(self):
+        class Pages:
+            def __init__(self, values):
+                self.values = values
+                self.shape, self._version, self.reads = (len(values),), 0, 0
+            def data_ptr(self):
+                return id(self)
+            def tolist(self):
+                self.reads += 1
+                return list(self.values)
+        a, b = Pages([3, 9, 4]), Pages([8, 2, 7])
+        manager = SimpleNamespace(_gpu_page_table_manager=object(),
+            _sequences={91: SimpleNamespace(pages=a), 7: SimpleNamespace(pages=b)},
+            get_page_table_version=lambda: 5)
+        cache = candidate.MetadataPlanCache()
+        first = cache.prepare(manager, [91, 7], [65, 127], context_cap=256, gpu_page_count=16)
+        second = cache.prepare(manager, [91, 7], [66, 128], context_cap=256, gpu_page_count=16)
+        self.assertIs(first.reservation_table, second.reservation_table)
+        self.assertEqual((a.reads, b.reads, cache.hits, cache.rebuilds), (1, 1, 1, 1))
+        self.assertEqual(second.small_arrays()["positions"].tolist(), [[65], [127]])
+        # Only the small metadata builder is needed: token indices will be
+        # generated on GPU from the full validated reservation table.
+        self.assertNotIn("kv_indices", second.small_arrays())
+        self.assertEqual(second.reservation_table.tolist(), [[3, 9, 4, -1], [8, 2, 7, -1]])
+        a.values[0] = 1
+        a._version += 1
+        changed = cache.prepare(manager, [91, 7], [67, 128], context_cap=256, gpu_page_count=16)
+        self.assertIsNot(changed.reservation_table, first.reservation_table)
+        self.assertEqual(changed.pages[0], (1, 9))
+        with self.assertRaises(ValueError):
+            cache.prepare(manager, [91, 7], [193, 128], context_cap=256, gpu_page_count=16)
+        # Allocator epoch change forces revalidation even with stable pointers.
+        manager.get_page_table_version = lambda: 6
+        cache.prepare(manager, [91, 7], [67, 128], context_cap=256, gpu_page_count=16)
+        self.assertEqual(cache.rebuilds, 3)
+
     def test_nonmonotonic_rows_partial_page_and_remapped_working_set(self):
         plan = candidate.plan_metadata([91, 7], [65, 127], {91: [3, 9, 4], 7: [8, 2]},
                                         context_cap=256, gpu_page_count=16)
@@ -143,6 +179,33 @@ class FIWrapperBoundaryContracts(unittest.TestCase):
         self.assertNotEqual(first, item.signature)
         self.assertEqual(item.wrapper.calls[1][3].tolist(), [66, 128])
         self.assertEqual(item.wrapper.calls[1][2][:64].tolist(), list(range(64, 128)))
+        # Retain the per-forward CPU storage without copying its full token
+        # page list again. A later remap must still replace the earlier view.
+        self.assertTrue(np.shares_memory(item.cpu_keepalive[2], b["kv_indices"]))
+        self.assertTrue(np.shares_memory(item.cpu_keepalive[3], b["lengths"]))
+        self.assertFalse(np.shares_memory(item.cpu_keepalive[2], a["kv_indices"]))
+
+    def test_borrowed_subbatch_indices_keep_exact_offsets_after_parent_release(self):
+        class Wrapper:
+            def __init__(self, workspace, **kwargs):
+                self._backend, self._use_cuda_graph = kwargs["backend"], kwargs["use_cuda_graph"]
+            def plan(self, *args):
+                self._plan_info = [len(args[3]), len(args[2]), 17]
+        torch = SimpleNamespace(uint8="uint8", int32=np.int32, bfloat16="bf16",
+                                empty=lambda *shape, **kw: Value(shape, dtype=kw.get("dtype")),
+                                arange=lambda count, **kw: np.arange(count, dtype=np.int32),
+                                from_numpy=lambda value: value)
+        backend = SimpleNamespace(_flashinfer=lambda: SimpleNamespace(BatchMLAPagedAttentionWrapper=Wrapper), WORKSPACE_BYTES=128*1024**2)
+        with patch.dict(sys.modules, {"torch": torch, "batchgen.attention.mla.common_flashinfer_backend": backend}):
+            item = candidate._AttentionPlan(1, 256, 128, 0.1, "cuda:0")
+            arrays = candidate.plan_metadata([1, 2], [65, 127], {1: [3, 9], 2: [8, 2]},
+                                             context_cap=256, gpu_page_count=16).arrays()
+            item.prepare(arrays, 1, 2)
+            self.assertTrue(np.shares_memory(item.cpu_keepalive[2], arrays["kv_indices"]))
+            del arrays
+        self.assertEqual(item.cpu_keepalive[1].tolist(), [0, 127])
+        self.assertEqual(item.cpu_keepalive[2].tolist(), list(range(8*64, 9*64)) + list(range(2*64, 3*64-1)))
+        self.assertEqual(item.cpu_keepalive[3].tolist(), [127])
 
 
 class ReplayHostContracts(unittest.TestCase):

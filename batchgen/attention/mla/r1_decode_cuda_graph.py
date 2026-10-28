@@ -19,12 +19,44 @@ from dataclasses import dataclass
 import logging
 import math
 import os
+import time
 
 
 ENVIRONMENT = "BATCHGEN_R1_DECODE_CUDA_GRAPH"
 _FORWARD = ContextVar("r1_decode_graph_forward", default=None)
 _WHOLE_MODEL = ContextVar("r1_whole_model_attention_capture", default=None)
 _CAPTURE_INPUTS = ContextVar("r1_decode_graph_external_inputs", default=None)
+_INDEX_KERNEL = None
+
+
+def fast_metadata_requested():
+    value = os.environ.get("BATCHGEN_R1_DECODE_FAST_METADATA", "0")
+    if value not in ("0", "1"):
+        raise ValueError("BATCHGEN_R1_DECODE_FAST_METADATA must be 0 or 1")
+    return value == "1"
+
+
+def _expand_token_page_indices(page_table, indptr, lengths, output,
+                               TABLE_WIDTH: tl.constexpr, ROW_START: tl.constexpr,
+                               BLOCK: tl.constexpr):
+    # Compiled lazily: importing the metadata planner stays Torch/Triton-free.
+    row = tl.program_id(0)
+    token = tl.program_id(1) * BLOCK + tl.arange(0, BLOCK)
+    valid = token < tl.load(lengths + row)
+    physical = tl.load(page_table + (row + ROW_START) * TABLE_WIDTH + token // 64,
+                       mask=valid, other=0)
+    start = tl.load(indptr + row)
+    tl.store(output + start + token, physical * 64 + token % 64, mask=valid)
+
+
+def _index_kernel():
+    global _INDEX_KERNEL
+    if _INDEX_KERNEL is None:
+        import triton
+        import triton.language
+        globals()["tl"] = triton.language
+        _INDEX_KERNEL = triton.jit(_expand_token_page_indices)
+    return _INDEX_KERNEL
 
 
 def attention_source_tensors(wrapper):
@@ -125,6 +157,7 @@ class MetadataPlan:
     page_table_width: int
     kv_indptr: tuple
     gpu_page_count: int
+    reservation_table: object = None
 
     @property
     def rows(self):
@@ -150,6 +183,70 @@ class MetadataPlan:
                 "lengths": np.asarray(self.lengths, dtype=np.int32),
                 "positions": np.asarray(self.positions, dtype=np.int64).reshape(self.rows, 1),
                 "query_indptr": np.arange(self.rows + 1, dtype=np.int32)}
+
+    def small_arrays(self):
+        """CPU scheduler inputs only; token-page IDs are generated on GPU."""
+        import numpy as np
+        table = self.reservation_table
+        if table is None:
+            table = np.full((self.rows, self.page_table_width), -1, dtype=np.int32)
+            for row, pages in enumerate(self.pages):
+                table[row, :len(pages)] = pages
+        lengths = np.asarray(self.lengths, dtype=np.int32)
+        return {"page_table": table, "kv_indptr": np.asarray(self.kv_indptr, dtype=np.int32),
+                "lengths": lengths, "positions": (lengths.astype(np.int64) - 1).reshape(self.rows, 1)}
+
+
+class MetadataPlanCache:
+    """Reuse validated reservations until the manager's mapping epoch changes.
+
+    All allocator APIs update rebuild_version. Normal CPU page-tensor changes
+    are additionally detected by identity/pointer/size/version; unversioned
+    page tensors still require the allocator epoch protocol. Lengths and row
+    order are validated on every use, including the final partial page.
+    """
+    def __init__(self):
+        self.key = None
+        self.reservations = None
+        self.table = None
+        self.hits = self.rebuilds = 0
+
+    def prepare(self, manager, gids, lengths, *, context_cap, gpu_page_count):
+        gids, lengths = tuple(gids), tuple(lengths)
+        if len(gids) != len(lengths) or len(set(gids)) != len(gids):
+            raise ValueError("R1 graph gids must be unique and align with cache lengths")
+        binding = []
+        for gid in gids:
+            pages = manager._sequences[gid].pages
+            try:
+                version = pages._version
+            except RuntimeError:
+                version = None
+            binding.append((id(pages), pages.data_ptr(), tuple(pages.shape), version))
+        key = (id(manager), id(manager._gpu_page_table_manager), manager.get_page_table_version(),
+               gids, context_cap, gpu_page_count, tuple(binding))
+        if key != self.key:
+            import numpy as np
+            pages_by_gid = {gid: tuple(int(x) for x in manager._sequences[gid].pages.tolist()) for gid in gids}
+            # Validate all usable reservations once, including future pages.
+            capacities = tuple(min(len(pages_by_gid[gid]) * 64, context_cap) for gid in gids)
+            checked = plan_metadata(gids, capacities, pages_by_gid,
+                                    context_cap=context_cap, gpu_page_count=gpu_page_count)
+            table = np.full((len(gids), checked.page_table_width), -1, dtype=np.int32)
+            for row, pages in enumerate(checked.pages):
+                table[row, :len(pages)] = pages
+            self.key, self.reservations, self.table = key, checked.pages, table
+            self.rebuilds += 1
+        else:
+            self.hits += 1
+        selected, indptr = [], [0]
+        for length, pages in zip(lengths, self.reservations):
+            if type(length) is not int or not 1 <= length <= context_cap or length > len(pages) * 64:
+                raise ValueError("R1 graph row length is invalid or exceeds validated GPU reservation")
+            selected.append(pages[:math.ceil(length / 64)])
+            indptr.append(indptr[-1] + length)
+        return MetadataPlan(gids, lengths, tuple(selected), math.ceil(context_cap / 64),
+                            tuple(indptr), gpu_page_count, self.table)
 
 
 def plan_metadata(gids, lengths, pages_by_gid, *, context_cap, gpu_page_count):
@@ -213,6 +310,7 @@ class _AttentionPlan:
         self.heads, self.scale = heads, scale
         self.signature = None
         self.cpu_keepalive = None
+        self.fast_initialized = False
 
     def prepare(self, arrays, start, end):
         import numpy as np
@@ -242,6 +340,38 @@ class _AttentionPlan:
                                   cache[..., :512], cache[..., 512:], return_lse=False)
         return output.unsqueeze(1)
 
+    def prepare_fast(self, arrays, start, end, page_table):
+        """FI0.5.2 native scheduler + GPU page expansion, with full plan key."""
+        import numpy as np
+        import torch
+        if not self.fast_initialized:
+            from importlib.metadata import version
+            if version("flashinfer-python") != "0.5.2":
+                raise RuntimeError("Fast R1 metadata requires the qualified FlashInfer0.5.2 API")
+        begin = int(arrays["kv_indptr"][start])
+        q = torch.arange(self.rows + 1, dtype=torch.int32)
+        indptr = torch.from_numpy(np.asarray(arrays["kv_indptr"][start:end + 1] - begin, dtype=np.int32))
+        lengths = torch.from_numpy(arrays["lengths"][start:end])
+        self.cpu_keepalive = (q, indptr, lengths, arrays)
+        if not self.fast_initialized:
+            # Device indices alias the wrapper's capture-stable destination;
+            # plan() needs only indptr/lengths for its CPU scheduler. The GPU
+            # expansion below fills the valid prefix before attention runs.
+            self.wrapper.plan(q, indptr, self.kv_indices, lengths, self.heads, 512, 64, 1,
+                              False, self.scale, torch.bfloat16, torch.bfloat16)
+            self.fast_initialized = True
+        else:
+            self.kv_indptr.copy_(indptr, non_blocking=True)
+            self.lengths.copy_(lengths, non_blocking=True)
+            self.wrapper._plan_info = self.wrapper._cached_module.plan(
+                self.wrapper._float_workspace_buffer, self.wrapper._int_workspace_buffer,
+                self.wrapper._pin_memory_int_workspace_buffer, q, indptr, lengths,
+                self.heads, 512, False)
+        self.signature = tuple(int(value) for value in self.wrapper._plan_info)
+        _index_kernel()[(self.rows, math.ceil(self.context_cap / 256))](
+            page_table, self.kv_indptr, self.lengths, self.kv_indices,
+            TABLE_WIDTH=page_table.shape[1], ROW_START=start, BLOCK=256)
+
 
 class PreparedBatch:
     """Persistent device addresses, staged once before the model forward."""
@@ -262,6 +392,9 @@ class PreparedBatch:
         self.plan_identity = None
         self.gids = ()
         self.forward_ordinal = 0
+        self.source_reservation_table = None
+        self.fast_metadata = fast_metadata_requested()
+        self.last_prepare_timing_ms = {}
 
     def prepare(self, plan):
         import torch
@@ -271,18 +404,32 @@ class PreparedBatch:
             raise RuntimeError("R1 graph workspace cannot change its serial owning CUDA stream")
         if plan.rows != self.rows:
             raise ValueError("R1 graph prepared-batch rows changed")
-        arrays = plan.arrays()
+        started = time.perf_counter()
+        arrays = plan.small_arrays() if self.fast_metadata else plan.arrays()
+        arrays_done = time.perf_counter()
         staged = {key: torch.from_numpy(value) for key, value in arrays.items()
                   if key in ("positions", "lengths", "page_table")}
         self.cpu_keepalive = staged
         self.positions.copy_(staged["positions"], non_blocking=True)
         self.lengths.copy_(staged["lengths"], non_blocking=True)
-        self.page_table.copy_(staged["page_table"], non_blocking=True)
+        table_changed = not self.fast_metadata or self.source_reservation_table is not arrays["page_table"]
+        if table_changed:
+            self.page_table.copy_(staged["page_table"], non_blocking=True)
+            self.source_reservation_table = arrays["page_table"]
+        staged_done = time.perf_counter()
         for item, (start, end) in zip(self.plans, self.ranges):
-            item.prepare(arrays, start, end)
+            if self.fast_metadata:
+                item.prepare_fast(arrays, start, end, self.page_table)
+            else:
+                item.prepare(arrays, start, end)
+        plans_done = time.perf_counter()
         self.plan_identity = tuple(item.signature for item in self.plans)
         self.gids = plan.gids
         self.forward_ordinal += 1
+        self.last_prepare_timing_ms = {"metadata_CPU_arrays": (arrays_done - started) * 1000,
+            "metadata_small_staging": (staged_done - arrays_done) * 1000,
+            "metadata_FI_plan_and_indices_submit": (plans_done - staged_done) * 1000,
+            "metadata_table_refreshed": int(table_changed)}
 
 
 class R1DecodeGraphPool:
@@ -290,6 +437,7 @@ class R1DecodeGraphPool:
     def __init__(self, context_cap, heads, scale, device):
         self.context_cap, self.heads, self.scale, self.device = context_cap, heads, scale, device
         self.prepared_batch = None
+        self.metadata_cache = MetadataPlanCache()
 
     def prepare(self, plan, micro_batch_size):
         batch = self.prepared_batch
@@ -316,10 +464,7 @@ def forward_scope(model, manager, gids, lengths, *, context_cap, micro_batch_siz
         raise RuntimeError("R1 graph model entry must prepare outside capture")
     if list(gids) != list(manager._gpu_page_table_manager.slot_to_seq_id):
         raise ValueError("R1 graph row order differs from the active GPU page table")
-    pages = {int(gid): tuple(int(page) for page in manager._sequences[gid].pages.tolist()) for gid in gids}
-    plan = plan_metadata(gids, lengths, pages, context_cap=context_cap,
-                         gpu_page_count=int(manager.config.num_pages))
-    if not plan.rows:
+    if not gids:
         token = _FORWARD.set((None, manager))
         try:
             yield None
@@ -335,7 +480,17 @@ def forward_scope(model, manager, gids, lengths, *, context_cap, micro_batch_siz
         model._r1_decode_cuda_graph_pool = pool
     elif (pool.context_cap, pool.heads, pool.scale, pool.device) != geometry:
         raise ValueError("R1 graph model geometry/device changed without releasing graphs")
+    plan_started = time.perf_counter()
+    if fast_metadata_requested():
+        plan = pool.metadata_cache.prepare(manager, gids, lengths, context_cap=context_cap,
+                                           gpu_page_count=int(manager.config.num_pages))
+    else:
+        pages = {int(gid): tuple(int(page) for page in manager._sequences[gid].pages.tolist()) for gid in gids}
+        plan = plan_metadata(gids, lengths, pages, context_cap=context_cap,
+                             gpu_page_count=int(manager.config.num_pages))
+    plan_done = time.perf_counter()
     batch = pool.prepare(plan, micro_batch_size)
+    batch.last_prepare_timing_ms["metadata_CPU_validation"] = (plan_done - plan_started) * 1000
     token = _FORWARD.set((batch, manager))
     try:
         yield batch

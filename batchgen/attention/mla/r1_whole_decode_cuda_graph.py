@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 ENVIRONMENT = "BATCHGEN_R1_WHOLE_DECODE_CUDA_GRAPH"
 COMPARE_ENVIRONMENT = "BATCHGEN_R1_WHOLE_GRAPH_COMPARE"
+_MISSING_BINDING = object()
 
 
 def comparison_requested():
@@ -125,6 +126,11 @@ def _weight_signature(model):
         cache_entry = getattr(attn, "_mla_decode_weight_cache_entry", None)
         result.append(_tensor_signature(None if cache_entry is None else cache_entry[-1]))
         mlp = layer.mlp
+        gate = getattr(mlp, "gate", None)
+        for name in ("weight", "e_score_correction_bias"):
+            value = getattr(gate, name, None)
+            if value is not None:
+                result.append(_tensor_signature(value, version=True))
         for norm_name in ("input_layernorm", "post_attention_layernorm"):
             norm = getattr(layer, norm_name, None)
             if norm is not None:
@@ -158,7 +164,169 @@ def _attention_signature(wrapper):
     return attention_source_signature(wrapper)
 
 
-def _signature(worker, model, manager, batch, pool, input_ids, invalidations):
+def fast_weight_guard_requested():
+    value = os.environ.get("BATCHGEN_R1_DECODE_FAST_WEIGHT_GUARD", "0")
+    if value not in ("0", "1"):
+        raise ValueError("BATCHGEN_R1_DECODE_FAST_WEIGHT_GUARD must be 0 or 1")
+    return value == "1"
+
+
+def _guard_tensor_key(tensor):
+    try:
+        version = tensor._version
+    except RuntimeError:
+        version = None
+    # Retain pointer/layout checks as well as normal inplace version guards:
+    # a .data rebind can bypass the version counter. Tensor data writes via
+    # external aliases still require the owner's existing invalidation hook.
+    return (tensor.data_ptr(), version, tuple(tensor.shape), tuple(tensor.stride()),
+            tensor.dtype, tensor.device, tensor.storage_offset())
+
+
+class CapturedWeightSignature:
+    """Flat binding/version/layout guards over the captured weight owners.
+
+    Stable steps reuse the complete signature, avoiding repeated model-tree
+    traversal, scale sorting, storage wrappers and dtype/device formatting.
+    Every live Tensor is still checked each step; module/Parameter/scale/bank
+    replacement and structural changes force a fresh scan and graph capture.
+    """
+    def __init__(self, model):
+        self.revision = 0
+        self.refreshes = 0
+        self._capture(model)
+
+    def _capture(self, model):
+        self.model = model
+        self.bindings, self.sequences, self.mappings, self.native_apis = [], [], [], []
+        tensors, dictionaries = {}, set()
+        def mapping(value):
+            if id(value) not in dictionaries:
+                dictionaries.add(id(value));self.mappings.append((value, len(value)))
+        def attr(owner, key, default=None):
+            if owner is None:
+                return default
+            storage = vars(owner)
+            value = getattr(owner, key, default)
+            if key in storage:
+                self.bindings.append((storage, key, value))
+            else:
+                found = False
+                for child in ("_parameters", "_buffers", "_modules"):
+                    values = storage.get(child)
+                    if isinstance(values, dict) and key in values:
+                        # Guard dictionary replacement as well as entry writes.
+                        self.bindings.append((storage, child, values))
+                        mapping(values)
+                        self.bindings.append((values, key, value));found = True;break
+                if not found:
+                    # Optional missing attributes must remain missing. Normal
+                    # nn.Module registrations occur in one of these mappings.
+                    self.bindings.append((storage, key, _MISSING_BINDING))
+                    for child in ("_parameters", "_buffers", "_modules"):
+                        values = storage.get(child)
+                        if isinstance(values, dict):
+                            self.bindings.append((storage, child, values));mapping(values)
+            return value
+        def tensor(value):
+            if value is not None and id(value) not in tensors:
+                tensors[id(value)] = (value, _guard_tensor_key(value))
+        def source_scales(owner):
+            values = attr(owner, "weight_dequant_scale", {})
+            mapping(values)
+            for key, value in values.items():
+                self.bindings.append((values, key, value));tensor(value)
+        def prepared(owner):
+            bank = attr(owner, "_r1_native_gemm_weights", ())
+            self.sequences.append((bank, tuple(bank)))
+            for item in bank:
+                tensor(attr(item, "weight"));tensor(attr(item, "scale"))
+        def projections(owner):
+            module = attr(owner, "module", owner)
+            prepared(module)
+            for name in ("gate_proj", "up_proj", "down_proj"):
+                projection = attr(module, name)
+                if projection is not None:
+                    tensor(attr(projection, "weight"))
+            source_scales(owner)
+        inner = attr(model, "model")
+        layers = attr(inner, "layers")
+        self.sequences.append((layers, tuple(layers)))
+        attr(model, "_r1_weight_generation")
+        for layer in layers:
+            wrapper = attr(layer, "self_attn")
+            attn = attr(wrapper, "module", wrapper)
+            for name in ("q_a_proj", "q_b_proj", "kv_a_proj_with_mqa", "kv_b_proj", "o_proj",
+                         "q_a_layernorm", "kv_a_layernorm"):
+                projection = attr(attn, name)
+                if projection is not None:
+                    tensor(attr(projection, "weight"))
+            source_scales(wrapper);prepared(attn)
+            rotary = attr(attn, "rotary_emb")
+            for name in ("cos_cached", "sin_cached"):
+                tensor(attr(rotary, name))
+            entry = attr(attn, "_mla_decode_weight_cache_entry")
+            tensor(None if entry is None else entry[-1])
+            for name in ("input_layernorm", "post_attention_layernorm"):
+                norm = attr(layer, name)
+                if norm is not None:
+                    tensor(attr(norm, "weight"))
+            mlp = attr(layer, "mlp")
+            gate = attr(mlp, "gate")
+            if gate is not None:
+                for name in ("weight", "e_score_correction_bias"):
+                    tensor(attr(gate, name))
+            adapter = attr(mlp, "r1_deepep_adapter")
+            if adapter is not None:
+                native = getattr(adapter, "graph_weight_tensors", None)
+                if callable(native):
+                    values = tuple(native())
+                    if not values or any(value is None for value in values):
+                        raise RuntimeError("Native R1 MoE graph requires actual weight tensors")
+                    self.native_apis.append((adapter, values))
+                    for value in values:
+                        tensor(value)
+                else:
+                    for name in ("gate_ptrs_ptr", "up_ptrs_ptr", "down_ptrs_ptr",
+                                 "gate_scale_ptrs_ptr", "up_scale_ptrs_ptr", "down_scale_ptrs_ptr"):
+                        tensor(attr(mlp, name))
+                projections(attr(mlp, "shared_experts"))
+            else:
+                projections(mlp)
+        for name in ("embed_tokens", "norm"):
+            owner = attr(inner, name)
+            if owner is not None:
+                tensor(attr(owner, "weight"))
+        tensor(attr(attr(model, "lm_head"), "weight"))
+        self.tensors = tuple(tensors.values())
+        self.full_signature = _weight_signature(model)
+        self.refreshes += 1
+        self.key = (id(self), self.revision, self.full_signature)
+
+    def signature(self, model):
+        changed = model is not self.model
+        if not changed:
+            changed = any(values.get(key, _MISSING_BINDING) is not expected for values, key, expected in self.bindings)
+        if not changed:
+            changed = any(len(values) != size for values, size in self.mappings)
+        if not changed:
+            changed = any(len(seq) != len(expected) or any(a is not b for a, b in zip(seq, expected))
+                          for seq, expected in self.sequences)
+        if not changed:
+            for adapter, values in self.native_apis:
+                current = tuple(adapter.graph_weight_tensors())
+                if len(current) != len(values) or any(a is not b for a, b in zip(current, values)):
+                    changed = True
+                    break
+        if not changed:
+            changed = any(_guard_tensor_key(value) != expected for value, expected in self.tensors)
+        if changed:
+            self.revision += 1
+            self._capture(model)
+        return self.key
+
+
+def _signature(worker, model, manager, batch, pool, input_ids, invalidations, weight_guard=None):
     import torch
     # An initial zero-row rank may have no active GPU page table at all.
     # Its ghost graph executes only LL expert work and captures no KV input.
@@ -182,7 +350,7 @@ def _signature(worker, model, manager, batch, pool, input_ids, invalidations):
             getattr(manager, "_r1_graph_generation", None),
             id(pool), pool.capacity, pool.phase_configurations, invalidations,
             tuple(input_ids.shape), str(input_ids.dtype), str(input_ids.device),
-            metadata, caches, _weight_signature(model))
+            metadata, caches, (_weight_signature(model) if weight_guard is None else weight_guard.signature(model)))
 
 
 def _wait_event(event, *, timeout=120):
@@ -370,6 +538,15 @@ class R1WholeDecodeState:
         self.compare_enabled = comparison_requested()
         self.compared_nonzero_rows = False
         self.diagnostic_eager_passes = 0
+        self.weight_guard = None
+
+    def _weight_guard_for(self, model):
+        if not fast_weight_guard_requested():
+            return None
+        if self.weight_guard is None:
+            self.weight_guard = CapturedWeightSignature(model)
+        return self.weight_guard
+
 
     def compare_first_nonzero_replay(self, worker, record):
         """All EP ranks join one eager pass when any rank needs its first check.
@@ -433,6 +610,8 @@ class R1WholeDecodeState:
         if record is not None and record.last_done is not None:
             _wait_event(record.last_done)
         self.record = None
+        # Release tensor owners along with their captured graph.
+        self.weight_guard = None
         self.invalidations += 1
         logging.info("[R1_WHOLE_GRAPH_INVALIDATE] reason=%s generation=%d", reason, self.invalidations)
 
@@ -475,7 +654,7 @@ class R1WholeDecodeState:
                 pool.external_valid_rows = True
                 pool.set_valid_rows(len(gids))
                 signature = _signature(worker, model, manager, batch, pool,
-                                       input_ids, self.invalidations)
+                                       input_ids, self.invalidations, self._weight_guard_for(model))
             except Exception as exc:
                 error = type(exc).__name__ + ": " + str(exc)
             changed = self.record is None or self.record.signature != signature
@@ -496,7 +675,7 @@ class R1WholeDecodeState:
                 error = None
                 try:
                     record.signature = _signature(worker, model, manager, batch, pool,
-                                                   input_ids, self.invalidations)
+                                                   input_ids, self.invalidations, self._weight_guard_for(model))
                 except Exception as exc:
                     error = type(exc).__name__ + ": " + str(exc)
                 self.coordinator.agree("final-capture-signature", error=error)
