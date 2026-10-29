@@ -1187,13 +1187,22 @@ def mla_prefill_flashattention3_w8a16_deepgemm_prepacked(
 			self, hidden_states, position_ids, max_seqlen,
 			weight_scale, _gemm, chunk_size,
 		)
+	from batchgen.gemm import r1_native_gemm
+	_reuse_input_quant = (not _w8a16_dequant_path
+		and r1_native_gemm.shared_input_quant_reuse_enabled())
 
 	# Project Q
-	query_states = _gemm(
-		self.q_a_proj.weight.data,
-		weight_scale["q_a_proj.weight_scale_inv"],
-		hidden_states
-	)
+	if _reuse_input_quant:
+		_shared_x_fp8, _shared_x_scale = r1_native_gemm.quantize(hidden_states)
+		query_states = r1_native_gemm.gemm(
+			_shared_x_fp8, _shared_x_scale, self.q_a_proj.weight.data,
+			weight_scale["q_a_proj.weight_scale_inv"])
+	else:
+		query_states = _gemm(
+			self.q_a_proj.weight.data,
+			weight_scale["q_a_proj.weight_scale_inv"],
+			hidden_states
+		)
 	query_states = self.q_a_layernorm(query_states)
 	query_states = _gemm(
 		self.q_b_proj.weight.data,
@@ -1207,11 +1216,17 @@ def mla_prefill_flashattention3_w8a16_deepgemm_prepacked(
 	)
 
 	# Project KV
-	compressed_kv = _gemm(
-		self.kv_a_proj_with_mqa.weight.data,
-		weight_scale["kv_a_proj_with_mqa.weight_scale_inv"],
-		hidden_states
-	)
+	if _reuse_input_quant:
+		compressed_kv = r1_native_gemm.gemm(
+			_shared_x_fp8, _shared_x_scale, self.kv_a_proj_with_mqa.weight.data,
+			weight_scale["kv_a_proj_with_mqa.weight_scale_inv"])
+		del _shared_x_fp8, _shared_x_scale
+	else:
+		compressed_kv = _gemm(
+			self.kv_a_proj_with_mqa.weight.data,
+			weight_scale["kv_a_proj_with_mqa.weight_scale_inv"],
+			hidden_states
+		)
 	compressed_kv, k_pe = torch.split(
 		compressed_kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1
 	)

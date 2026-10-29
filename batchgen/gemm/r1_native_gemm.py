@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 
 ENV = "BATCHGEN_R1_ORDINARY_GEMM"
+SHARED_INPUT_QUANT_ENV = "BATCHGEN_R1_SHARED_INPUT_QUANT_REUSE"
 _LOOKUP = weakref.WeakValueDictionary()
 _RUNTIME = None
 
@@ -22,6 +23,19 @@ def enabled():
     if value not in ("legacy", "deep_gemm"):
         raise ValueError(f"{ENV} must be legacy or deep_gemm")
     return value == "deep_gemm"
+
+
+def shared_input_quant_reuse_enabled():
+    """Reuse only a single forward's common input; never retain activations.
+
+    The legacy GEMM path is unchanged even if the new flag is present. Weight
+    banks, quantization policy and the two individual native GEMMs stay the
+    same; this only avoids quantizing their identical BF16 input twice.
+    """
+    value = os.environ.get(SHARED_INPUT_QUANT_ENV, "0")
+    if value not in ("0", "1"):
+        raise ValueError(f"{SHARED_INPUT_QUANT_ENV} must be 0 or 1")
+    return value == "1" and enabled()
 
 
 def _runtime():
@@ -169,3 +183,18 @@ def linear(weight, weight_scale, x):
     shape = x.shape
     a, scales = quantize(x.view(-1, shape[-1]))
     return gemm(a, scales, weight, weight_scale).view(*shape[:-1], weight.shape[0])
+
+
+def linear_pair(weight_a, scale_a, weight_b, scale_b, x):
+    """Two original projections with one local FP8 activation materialization.
+
+    This neither fuses/reorders the GEMMs nor creates a combined weight bank.
+    Both calls retain ``gemm``'s complete source lifetime and mutation checks.
+    During graph capture the quantization remains a graph operation, so a
+    replay consumes the current input rather than a cached activation value.
+    """
+    shape = x.shape
+    a, scales = quantize(x.view(-1, shape[-1]))
+    first = gemm(a, scales, weight_a, scale_a).view(*shape[:-1], weight_a.shape[0])
+    second = gemm(a, scales, weight_b, scale_b).view(*shape[:-1], weight_b.shape[0])
+    return first, second

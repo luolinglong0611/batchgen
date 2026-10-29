@@ -628,8 +628,14 @@ class DeepseekV3MLP(nn.Module):
 	
 	@torch.inference_mode
 	def deepgemm_forward(self, x, scale):
-		up = w8a16_gemm(self.up_proj.weight.data, scale['up_proj.weight_scale_inv'], x)
-		gate = w8a16_gemm(self.gate_proj.weight.data, scale['gate_proj.weight_scale_inv'], x)
+		from batchgen.gemm import r1_native_gemm
+		if r1_native_gemm.shared_input_quant_reuse_enabled():
+			up, gate = r1_native_gemm.linear_pair(
+				self.up_proj.weight.data, scale['up_proj.weight_scale_inv'],
+				self.gate_proj.weight.data, scale['gate_proj.weight_scale_inv'], x)
+		else:
+			up = w8a16_gemm(self.up_proj.weight.data, scale['up_proj.weight_scale_inv'], x)
+			gate = w8a16_gemm(self.gate_proj.weight.data, scale['gate_proj.weight_scale_inv'], x)
 		intermediate = self.act_fn(gate) * up
 		return w8a16_gemm(self.down_proj.weight.data, scale['down_proj.weight_scale_inv'], intermediate)
 		# x_fp8, x_scale = act_quant(x)
