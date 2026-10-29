@@ -1,0 +1,191 @@
+{
+  "schema": "r1-sm103-priority-opt-frozen-validation-v1",
+  "version_tag": "r1-sm103-priority-opt-20261029",
+  "scope": "Previously completed qualifications, short256 and formal6000, then source-identical functional commits. These are single hot full-task measurements, not repeated trials or full-model precision qualification.",
+  "full6000": {
+    "counts": {
+      "requests": 6000,
+      "successful": 6000,
+      "errors": 0,
+      "prompt_tokens": 49152000,
+      "completion_tokens": 12288000
+    },
+    "BCT_seconds": 2041.614737845,
+    "output_TPS": 6018.765329334583,
+    "warm64_BCT_seconds_excluded": 184.33152798,
+    "warm64_errors": 0,
+    "same_PID_and_start_ticks_for_warm_and_measured": true,
+    "input_normalization": [
+      "ordinal",
+      "source_custom_id",
+      "input_ids_sha256",
+      "input_tokens",
+      "output_tokens",
+      "prompt_utf8_sha256"
+    ],
+    "normalized_input_rows_sha256": "490e7f319e8c551d934b7ffc11d2e540d95b6c4e4dc31db64013166156c751b9",
+    "comparison": {
+      "previous_BG_optimized": {
+        "reference_BCT_seconds": 2416.048796183,
+        "reference_output_TPS": 5085.989993005614,
+        "BCT_delta_seconds": -374.4340583379999,
+        "BCT_change_percent": -15.497785430888245,
+        "output_TPS_change_percent": 18.340093818740222,
+        "output_TPS_ratio": 1.1834009381874022
+      },
+      "SGLang_MegaMoE": {
+        "reference_BCT_seconds": 1696.535748986,
+        "reference_output_TPS": 7242.995031106416,
+        "BCT_delta_seconds": 345.078988859,
+        "BCT_change_percent": 20.340213229532587,
+        "output_TPS_change_percent": -16.902257926647003,
+        "output_TPS_ratio": 0.83097742073353
+      }
+    },
+    "stage_seconds": {
+      "prefill_seconds_rounded": 523.6,
+      "decode_seconds_rounded": 1473.1,
+      "server_total_seconds_rounded": 2016.2,
+      "rank0_tokenize_collect_seconds": 13.52334,
+      "rank0_phase_switch_seconds": 19.483,
+      "rank0_Host_H2D_READY_wait_seconds_included_in_decode": 63.093044
+    },
+    "previous_BG_stage_seconds": {
+      "tokenize_collect_seconds": 12.975736,
+      "server_prefill_seconds_rounded": 861.4,
+      "server_decode_seconds_rounded": 1514.3,
+      "rank0_phase_switch_seconds": 17.403,
+      "rank0_rotation_wait_seconds_included_in_decode": 63.318901
+    },
+    "rank0_Host_READY_events": 60,
+    "phase_total_caveat": "Rounded service phase totals are not additive GPU categories; READY waits are already included in decode.",
+    "cleanup": {
+      "normal_STOP_completed": true,
+      "server_returncode": 0,
+      "forced_cleanup": false,
+      "remaining_processes": []
+    }
+  },
+  "short256": {
+    "requests": 256,
+    "successful": 256,
+    "errors": 0,
+    "BCT_seconds": 168.50750808,
+    "output_TPS": 3111.362847,
+    "warm64_excluded": true,
+    "actual_rows_per_rank": 32,
+    "scope": "Functional end-to-end qualification only; not comparable to full6000 throughput."
+  },
+  "GPU_qualifications": {
+    "prefill_attention": {
+      "old_FA2_ms": 6.397232,
+      "CUTLASS_ms": 2.04976,
+      "scope": "Native single-layer 8192 tokens x 128 heads, model scale 0.1352337788608801; same BF16 Q/K192 and V128. Compared against FP32 SDPA and old FA2 within tolerance, maximum absolute error 0.015625; no Q/K/V mutation."
+    },
+    "prefill_normal_SM": {
+      "max_rank_median_ms": {
+        "20": 9.3088,
+        "40": 7.208992,
+        "80": 6.227904,
+        "120": 6.1848,
+        "144": 6.17248
+      },
+      "selected_dispatch_SM": 80,
+      "selected_combine_SM": 80,
+      "selected_NVL_bytes_per_card": 1342839040,
+      "decode_LL_global_SM_unchanged": 20,
+      "outputs": "Real R1 layer3, same weights/inputs/routing; all eight rank outputs byte-identical across scan."
+    },
+    "prefill_silu_quant": {
+      "qualified_cases": 28,
+      "FP8_values_and_packed_scales_byte_identical": true,
+      "cases": "random, zero, tiny, exponent boundary and tails",
+      "per_group_channels": 128,
+      "scale_floor": "max(amax/448,1e-10)",
+      "retained_BF16_rounding": true,
+      "JIT_specializations_for_qualified_row_sizes": 1,
+      "row_sizes": [
+        1,
+        128,
+        129,
+        4096,
+        65536,
+        101888
+      ]
+    },
+    "MoE_combined_80SM_fused": {
+      "old_20SM_stock_ms": 9.309951782,
+      "selected_80SM_fused_ms": 5.995103836,
+      "all8_output_bytes_exact": true,
+      "scope": "Single-layer maximum-rank median of event spans; includes CPU submission gaps, not pure communication or GEMM time."
+    },
+    "decode_native_RoPE": {
+      "old_local_graph_ms": 0.085344,
+      "fused_local_graph_ms": 0.013216,
+      "rows": 192,
+      "cases": 6,
+      "dynamic_graph_replays_per_case": 3,
+      "outputs": "Latent and finite Q/K bytes identical; NaN masks identical; matching input reset included in both timing paths."
+    },
+    "static_cast": {
+      "scope": "Actual R1 FP32 router weights and BF16 rotary table conversions; same math with source version/layout, cache mapping and CUDA graph lifetime guards. Dynamic graph input, source mutation and output-byte checks passed."
+    }
+  },
+  "source_postflight": {
+    "status": "PASS_all540_frozen_runtime_files_unchanged_after_normal_formal_completion",
+    "unix": 1793256629.7053752,
+    "manifest_sha256": "46e5e46dd1ca8b686a6a731057b9599aac510502ddf2e4602896b6b3649d42ce",
+    "runtime_files_checked": 540,
+    "mismatches": [],
+    "formal_summary_sha256": "c51399b1246ca076a7e42b6e7a2a042d10781192790cca98080c3e855f21d361"
+  },
+  "method_limits": [
+    "BCT uses complete response bytes; startup/full64warmup and postflight validation are excluded, service tokenization included, exactly original V2 scope.",
+    "Each original request-identity file is SHA-checked against its own receipt. Full6000 cross-run input comparison excludes run-local rid only after validating it, and checks every ordinal/source ID/token hash/length and prompt UTF8 hash from independently byte-pinned original requests. Raw output bytes are SHA-checked if exported, not independently retokenized.",
+    "Only receipt-bounded service-window log time/counters belong to measured task; full service logs include warmup and are used only for startup capacity/backend evidence.",
+    "Phase summary seconds are server-reported rounded phase totals, not additive GPU categories or cross-rank wall sums. H2D READY waits are included inside decode.",
+    "Graph capture/replay log evidence supports mechanism; periodic wrapper counters are not an exact count of all model forwards including warm/capture.",
+    "Old8064/9344 and new scheduler iter counters are loop attempts, never exact model-forward counts.",
+    "No new profiler result, GPU activity timeline, bandwidth or precision qualification is inferred from this offline performance audit.",
+    "The three full-task versions each have one valid run; no confidence interval.",
+    "No per-patch full6000 ablation; combined gains cannot be assigned to individual patches.",
+    "Workload derives from existing LongBench material; not claimed to be the paper authors original request file.",
+    "BG and SG are independently tuned with different concurrency and KV capacity; SG uses an experimental R1 FP8 MegaMoE bridge and newer dependencies.",
+    "Cross-framework dense/router/activation quantization and top-k weighting differences remain; whole-model accuracy alignment was not performed."
+  ],
+  "private_evidence_sha256": {
+    "evidence/formal-v1/summary.json": "c51399b1246ca076a7e42b6e7a2a042d10781192790cca98080c3e855f21d361",
+    "evidence/formal-v1/configuration.json": "4d2e4d2dc78f3df6e83df756b1403953de9ed86f35ef29811158c20c72c20e7d",
+    "evidence/formal-v1/warm64/receipt.json": "e6690df899d95e84625e04924130d80b9374b23830b7d9fc3f7b8626ce9fde61",
+    "evidence/formal-v1/measured6000/receipt.json": "69db5514dc80272089ff08b728361942e5152f043601bfbda8d867849ef5e5eb",
+    "evidence/formal-v1/measured6000/service-window.log": "822bc57cb763dec3c53ae1de1d04babb9f891480e3f60c3ebdd3a95d9f98568d",
+    "evidence/launch/candidate-runtime-manifest.json": "46e5e46dd1ca8b686a6a731057b9599aac510502ddf2e4602896b6b3649d42ce",
+    "analysis/formal-independent-validated.json": "bc3c71face4e752a67c100472f7337b6462cb67a72a0fd0df89c46c38654fa4b",
+    "analysis/FORMAL-INDEPENDENT-REVIEW.json": "bf321f3e85d069cf88f317e82182abc584f57255e33b0857ebc86c69d45b56e3",
+    "runtime/postflight-frozen-source01.json": "73b8dbfd2fc35237e03341a0e3f177f035f08f9246fbb548fb58cdfda93dac9b",
+    "runtime/final-settlement01.json": "2a75d324bae01e1994b316cc44fee6a8ac238a5fd292a36e8f49b8436e3a9e35",
+    "evidence/bg-priority-initial-qualification-20261029-v1/attention/result.json": "d9c30ef35d1b551e4a7cce18123dea24c308e2a1f4d56e44e27fcca1642f092c",
+    "evidence/bg-priority-required-qualification-20261029-v2/normal/SUMMARY.json": "eaec467e7c89d644a27187ea219c860bae5887a0abb2f8625997d347df52198d",
+    "evidence/bg-priority-final-qualification-20261029-v4/fused_silu/rank0.json": "6cc542e10ba0797139297c69e9d0f347515cf770d5996a6e15a6157195fbc7eb",
+    "evidence/bg-priority-final-qualification-20261029-v4/normal/SUMMARY.json": "3b5f867fb4e356eab5806ba15bbd4b483036779485c37f292a73d9d0da585ba4",
+    "evidence/bg-priority-required-qualification-20261029-v2/rope/result.json": "9a12553790c335b94472bc2b2a136b732b9b2b0234647d96fdc3afb584af1bae",
+    "evidence/bg-priority-remaining-qualification-20261029-v3/static_cast/result.json": "639f66c03811b4557f29fd63b5935e989946b1e5d3dcacb8a5db6d45c59436ea"
+  },
+  "private_evidence_scope": "Original receipts/logs/qualification outputs remain in the existing local campaign archive, not embedded in this source freeze. Relative keys name files within that archive; SHA pins identify evidence, not public URLs.",
+  "publication_checks": {
+    "CPU_contracts": {
+      "passed": 356,
+      "seconds": 32.38,
+      "test_files": 28,
+      "runner": "python scripts/r1_reproduction/run_r1_cpu_tests.py",
+      "log_sha256": "dcb939849954d22a8e078908927abdf769d27b5191fb8802162618a7b2e0f9b9"
+    },
+    "source_freeze_verification": {
+      "status": "verified",
+      "files_checked": 564,
+      "mismatches": 0,
+      "Linux_binary_recheck_in_this_publication": false,
+      "original_GPU_postflight_files_checked": 540
+    }
+  }
+}

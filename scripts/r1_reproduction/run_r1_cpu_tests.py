@@ -30,6 +30,16 @@ TESTS = (
     "tests/worker/test_step_timing.py",
     "tests/worker/test_decode_trace.py",
     "tests/test_decode_step_timing_wiring.py",
+    "tests/test_r1_whole_kv_contiguous_stage.py",
+    "tests/test_r1_shared_input_quant_reuse.py",
+    "tests/test_tokenized_tensor_collective.py",
+    "tests/test_r1_blackwell_prefill.py",
+    "tests/test_r1_prefill_normal_config.py",
+    "tests/test_r1_prefill_silu_quant_contract.py",
+    "tests/test_r1_static_cast_reuse.py",
+    "tests/test_r1_rope_handoff_contract.py",
+    "tests/test_r1_deepgemm_moe.py",
+    "tests/test_r1_decode_fused_native_rope.py",
 )
 
 

@@ -15,7 +15,7 @@ def main():
     root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, default=Path(__file__).parent /
-        "frozen/r1-sm103-hotpath-20261028/SOURCE_FREEZE.json")
+        "frozen/r1-sm103-priority-opt-20261029/SOURCE_FREEZE.json")
     parser.add_argument("--check-binaries", action="store_true")
     args = parser.parse_args()
     manifest = json.loads(args.manifest.read_text())
