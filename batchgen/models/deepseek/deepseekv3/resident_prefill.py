@@ -54,8 +54,18 @@ class R1NormalPrefillExchange:
                 raise RuntimeError("Installed DeepEP lacks the reviewed normal " + name + " API")
         self.hidden, self.num_experts = hidden, num_experts
         self.world_size = group.size()
-        self.dispatch_config = buffer_type.get_dispatch_config(self.world_size)
-        self.combine_config = buffer_type.get_combine_config(self.world_size)
+        from .resident_prefill_tuning import requested_normal_sms, normal_config
+        self.requested_sms = requested_normal_sms()
+        device_sms = None
+        if any(self.requested_sms.values()):
+            import torch
+            device_sms = int(torch.cuda.get_device_properties(torch.cuda.current_device()).multi_processor_count)
+        self.dispatch_config = normal_config(buffer_type, getattr(deep_ep, "Config", None),
+            role="dispatch", requested_sms=self.requested_sms["dispatch"],
+            world_size=self.world_size, device_sm_count=device_sms)
+        self.combine_config = normal_config(buffer_type, getattr(deep_ep, "Config", None),
+            role="combine", requested_sms=self.requested_sms["combine"],
+            world_size=self.world_size, device_sm_count=device_sms)
         nvl = max(c.get_nvl_buffer_size_hint(hidden * 2, self.world_size)
                   for c in (self.dispatch_config, self.combine_config))
         rdma = max(c.get_rdma_buffer_size_hint(hidden * 2, self.world_size)
@@ -68,6 +78,10 @@ class R1NormalPrefillExchange:
         self.buffer_type = buffer_type
         self.nvl_bytes, self.rdma_bytes = nvl, rdma
         self.dispatch_submissions = self.combine_submissions = 0
+        logging.info("[R1_PREFILL_NORMAL_CONFIG] dispatch_sms_override=%d combine_sms_override=%d "
+                     "active_GPU_sms=%s NVL_bytes=%d RDMA_bytes=%d global_Buffer_num_sms_unchanged=True",
+                     self.requested_sms["dispatch"], self.requested_sms["combine"],
+                     device_sms, nvl, rdma)
 
     def dispatch(self, quantized, topk_ids, topk_weights):
         previous = self.buffer_type.capture()
