@@ -36,6 +36,15 @@ def fast_metadata_requested():
     return value == "1"
 
 
+def whole_kv_contiguous_stage_requested():
+    """Opt in to one materialization of all R1 layers after graph replay."""
+    name = "BATCHGEN_R1_WHOLE_KV_CONTIGUOUS_STAGE"
+    value = os.environ.get(name, "0")
+    if value not in ("0", "1"):
+        raise ValueError(f"{name} must be 0 or 1")
+    return value == "1"
+
+
 def _expand_token_page_indices(page_table, indptr, lengths, output,
                                TABLE_WIDTH: tl.constexpr, ROW_START: tl.constexpr,
                                BLOCK: tl.constexpr):
@@ -619,6 +628,7 @@ class WholeModelKVOutputs:
         self.kv_by_layer = {}
         self.capture_inputs = {}
         self.last_staged_replay = 0
+        self.contiguous_staging = whole_kv_contiguous_stage_requested()
 
     def record(self, layer, kv):
         if layer not in self.expected_layers:
@@ -635,8 +645,25 @@ class WholeModelKVOutputs:
             raise ValueError("Whole-model graph did not expose every required layer's KV")
         # Caller owns the replay order and source completion stream. Existing
         # native D2H records its producer event on this issuing current stream.
-        for layer in self.expected_layers:
-            callback(layer, self.kv_by_layer[layer].clone(), None)
+        if self.contiguous_staging and self.expected_layers:
+            tensors = tuple(self.kv_by_layer[layer] for layer in self.expected_layers)
+            first = tensors[0]
+            if any((value.shape, value.dtype, value.device) !=
+                   (first.shape, first.dtype, first.device) for value in tensors[1:]):
+                raise ValueError("Contiguous whole-model KV staging requires matching layer tensors")
+            # Same-stream materialization preserves the graph -> clone -> D2H
+            # ordering of the per-layer path. Each callback receives a view
+            # retaining this new allocation; the worker's existing deferred
+            # entries/tasks keep it alive through the append drain. Neither
+            # the static graph outputs nor a later replay can overwrite it.
+            # torch.stack copies the same bytes as all per-layer clones, with
+            # one allocation/materialization instead of one per layer.
+            staged = torch.stack(tensors, dim=0)
+            for offset, layer in enumerate(self.expected_layers):
+                callback(layer, staged[offset], None)
+        else:
+            for layer in self.expected_layers:
+                callback(layer, self.kv_by_layer[layer].clone(), None)
         self.last_staged_replay = replay_ordinal
 
 
