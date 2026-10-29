@@ -544,10 +544,8 @@ class DeepseekV3YarnRotaryEmbedding(DeepseekV3RotaryEmbedding):
 			 self._set_cos_sin_cache(seq_len=seq_len, device=x.device, dtype=x.dtype)
 		
 		# Standard forward
-		return (
-			self.cos_cached[:seq_len].to(dtype=x.dtype),
-			self.sin_cached[:seq_len].to(dtype=x.dtype),
-		)
+		from batchgen.gemm.r1_static_cast import rotary_values
+		return rotary_values(self.cos_cached, self.sin_cached, x, seq_len)
 
 
 # Copied from transformers.models.llama.modeling_llama.rotate_half
@@ -900,7 +898,8 @@ class MoEGate(nn.Module):
 		
 		# PyTorch handles heavy lifting
 		hidden_states_flat = hidden_states.view(-1, h)
-		logits = F.linear(hidden_states_flat.float(), self.weight.float(), None)
+		from batchgen.gemm.r1_static_cast import router_weight_fp32
+		logits = F.linear(hidden_states_flat.float(), router_weight_fp32(self.weight), None)
 		scores = torch.sigmoid(logits)
 		
 		# Custom kernel handles MoE routing

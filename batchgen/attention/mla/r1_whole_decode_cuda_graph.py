@@ -120,6 +120,20 @@ def _tensor_signature(tensor, *, version=False):
 def _weight_signature(model):
     """Check source pointers without traversing all placeholder expert modules."""
     result = []
+    static_cast_sources = set()
+    def static_casts(source):
+        if source is None or id(source) in static_cast_sources:
+            return
+        static_cast_sources.add(id(source))
+        entries = getattr(source, "_batchgen_r1_static_casts", None)
+        if entries is not None and not isinstance(entries, dict):
+            raise RuntimeError("R1 static cast cache must be a dtype mapping")
+        items = []
+        for dtype, item in sorted((entries or {}).items(), key=lambda pair: str(pair[0])):
+            if not isinstance(item, tuple) or len(item) != 3:
+                raise RuntimeError("R1 static cast cache entry must contain source/value/value-key")
+            items.append((dtype, id(item), item[0], _tensor_signature(item[1], version=True), item[2]))
+        result.append(("static_casts", id(source), id(entries), tuple(items)))
     def projections(owner):
         module = getattr(owner, "module", owner)
         for item in getattr(module, "_r1_native_gemm_weights", ()):
@@ -135,6 +149,9 @@ def _weight_signature(model):
         wrapper = layer.self_attn
         attn = getattr(wrapper, "module", wrapper)
         result.append(_attention_signature(wrapper))
+        rotary = getattr(attn, "rotary_emb", None)
+        for name in ("cos_cached", "sin_cached"):
+            static_casts(getattr(rotary, name, None))
         cache_entry = getattr(attn, "_mla_decode_weight_cache_entry", None)
         result.append(_tensor_signature(None if cache_entry is None else cache_entry[-1]))
         mlp = layer.mlp
@@ -143,6 +160,8 @@ def _weight_signature(model):
             value = getattr(gate, name, None)
             if value is not None:
                 result.append(_tensor_signature(value, version=True))
+                if name == "weight":
+                    static_casts(value)
         for norm_name in ("input_layernorm", "post_attention_layernorm"):
             norm = getattr(layer, norm_name, None)
             if norm is not None:
@@ -211,7 +230,7 @@ class CapturedWeightSignature:
     def _capture(self, model):
         self.model = model
         self.bindings, self.sequences, self.mappings, self.native_apis = [], [], [], []
-        tensors, dictionaries = {}, set()
+        tensors, dictionaries, static_cast_sources = {}, set(), set()
         def mapping(value):
             if id(value) not in dictionaries:
                 dictionaries.add(id(value));self.mappings.append((value, len(value)))
@@ -243,6 +262,24 @@ class CapturedWeightSignature:
         def tensor(value):
             if value is not None and id(value) not in tensors:
                 tensors[id(value)] = (value, _guard_tensor_key(value))
+        def static_casts(source):
+            if source is None or id(source) in static_cast_sources:
+                return
+            static_cast_sources.add(id(source))
+            entries = attr(source, "_batchgen_r1_static_casts")
+            if entries is None:
+                return
+            if not isinstance(entries, dict):
+                raise RuntimeError("R1 static cast cache must be a dtype mapping")
+            mapping(entries)
+            for dtype, item in entries.items():
+                if not isinstance(item, tuple) or len(item) != 3:
+                    raise RuntimeError("R1 static cast cache entry must contain source/value/value-key")
+                # The cache tuple is immutable. Dictionary/entry rebinding is
+                # checked before every replay, and the actual converted value
+                # also gets pointer/version/layout guards and a strong owner.
+                self.bindings.append((entries, dtype, item))
+                tensor(item[1])
         def source_scales(owner):
             values = attr(owner, "weight_dequant_scale", {})
             mapping(values)
@@ -276,7 +313,9 @@ class CapturedWeightSignature:
             source_scales(wrapper);prepared(attn)
             rotary = attr(attn, "rotary_emb")
             for name in ("cos_cached", "sin_cached"):
-                tensor(attr(rotary, name))
+                source = attr(rotary, name)
+                tensor(source)
+                static_casts(source)
             entry = attr(attn, "_mla_decode_weight_cache_entry")
             tensor(None if entry is None else entry[-1])
             for name in ("input_layernorm", "post_attention_layernorm"):
@@ -287,7 +326,10 @@ class CapturedWeightSignature:
             gate = attr(mlp, "gate")
             if gate is not None:
                 for name in ("weight", "e_score_correction_bias"):
-                    tensor(attr(gate, name))
+                    source = attr(gate, name)
+                    tensor(source)
+                    if name == "weight":
+                        static_casts(source)
             adapter = attr(mlp, "r1_deepep_adapter")
             if adapter is not None:
                 native = getattr(adapter, "graph_weight_tensors", None)

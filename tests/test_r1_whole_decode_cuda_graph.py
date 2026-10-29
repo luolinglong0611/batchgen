@@ -152,6 +152,62 @@ def test_gate_weights_and_correction_bias_are_guarded_in_full_and_cached_signatu
     assert guard.signature(model) != key
 
 
+def static_cast_fixture():
+    source = HERE.parent / "batchgen/gemm/r1_static_cast.py"
+    spec = importlib.util.spec_from_file_location("_whole_graph_static_cast_fixture", source)
+    casts = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(casts)
+    model = fixture_signature()[1]
+    gate = types.SimpleNamespace(weight=torch.nn.Parameter(torch.ones(2, 2, dtype=torch.bfloat16)))
+    model.model.layers[3].mlp.gate = gate
+    rotary = types.SimpleNamespace(cos_cached=torch.ones(8, 64), sin_cached=torch.zeros(8, 64))
+    model.model.layers[0].self_attn.module.rotary_emb = rotary
+    with torch.no_grad():
+        casts.cached_cast(gate.weight, torch.float32)
+        casts.cached_cast(rotary.cos_cached, torch.bfloat16, require_version=False)
+        casts.cached_cast(rotary.sin_cached, torch.bfloat16, require_version=False)
+    return model, casts, gate, rotary
+
+
+@pytest.mark.parametrize("which", ["router", "cos", "sin"])
+@pytest.mark.parametrize("mutation", ["inplace", "storage", "entry", "mapping"])
+def test_static_cast_actual_values_and_source_cache_bindings_guarded(which, mutation):
+    model, casts, gate, rotary = static_cast_fixture()
+    source = {"router": gate.weight, "cos": rotary.cos_cached, "sin": rotary.sin_cached}[which]
+    dtype = torch.float32 if which == "router" else torch.bfloat16
+    guard = module.CapturedWeightSignature(model)
+    key = guard.signature(model)
+    full_before = module._weight_signature(model)
+    entries = source._batchgen_r1_static_casts
+    item = entries[dtype]
+    if mutation == "inplace":
+        item[1].add_(1)
+    elif mutation == "storage":
+        item[1].data = item[1].clone()
+    elif mutation == "entry":
+        replacement = item[1].clone()
+        entries[dtype] = (item[0], replacement, casts._key(replacement, require_version=True))
+    else:
+        source._batchgen_r1_static_casts = dict(entries)
+    assert module._weight_signature(model) != full_before
+    assert guard.signature(model) != key
+
+
+def test_static_cast_stable_guard_uses_cached_signature_and_warmup_addition_invalidates():
+    model = fixture_signature()[1]
+    source = torch.nn.Parameter(torch.ones(2, 2, dtype=torch.bfloat16))
+    model.model.layers[3].mlp.gate = types.SimpleNamespace(weight=source)
+    guard = module.CapturedWeightSignature(model)
+    before = guard.signature(model)
+    assert guard.signature(model) is before
+    _, casts, _, _ = static_cast_fixture()
+    with torch.no_grad():
+        converted = casts.cached_cast(source, torch.float32)
+    after = guard.signature(model)
+    assert after != before and guard.signature(model) is after
+    assert any(value is converted for value, _ in guard.tensors)
+
+
 def test_prepared_ordinary_shared_weight_and_scale_updates_invalidate_graph():
     args = fixture_signature()
     entry = types.SimpleNamespace(weight=torch.ones(2, 2),
