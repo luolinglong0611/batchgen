@@ -1983,14 +1983,32 @@ class BatchGenWorker:
 					tokenized_by_idx[item["idx"]] = item
 				del payload
 		else:
+			_compact_token_collective = os.environ.get("BATCHGEN_TOKENIZER_COMPACT_COLLECTIVE", "0") == "1"
+			if _compact_token_collective and self.rank == 0:
+				logging.info("[ADMIT] Tokenizer token transport=compact_int64_tensor metadata_only_object_collective=true")
 			for group in plan.groups:
-				my_tokenized = tokenize_indices(
-					list(range(self.rank, num_new, self.world_size))
-				) if self.rank in group else []
 				# Each wave releases boxed tokenizer lists before the collective;
 				# all ranks use the same wave order, including inactive ranks.
-				all_tokenized_lists = [None] * self.world_size
-				dist.all_gather_object(all_tokenized_lists, my_tokenized)
+				if _compact_token_collective:
+					from batchgen.worker.tokenized_tensor_collective import gather_tokenized_tensors
+					_tokenizer_error = None
+					try:
+						my_tokenized = tokenize_indices(
+							list(range(self.rank, num_new, self.world_size))
+						) if self.rank in group else []
+					except Exception as exc:
+						my_tokenized = []
+						_tokenizer_error = type(exc).__name__ + ": " + str(exc)[:1000]
+					all_tokenized_lists = gather_tokenized_tensors(
+						my_tokenized, device=self.torch_device, active_ranks=group,
+						num_sequences=num_new, local_error=_tokenizer_error,
+					)
+				else:
+					my_tokenized = tokenize_indices(
+						list(range(self.rank, num_new, self.world_size))
+					) if self.rank in group else []
+					all_tokenized_lists = [None] * self.world_size
+					dist.all_gather_object(all_tokenized_lists, my_tokenized)
 				for rank_results in all_tokenized_lists:
 					if rank_results:
 						for item in rank_results:
