@@ -1174,6 +1174,8 @@ def mla_prefill_flashattention3_w8a16_deepgemm_prepacked(
 	total_tokens = hidden_states.shape[0]
 	from batchgen.attention.mla import r1_prefill_rope
 	_fused_prefill_rope = r1_prefill_rope.enabled()
+	from batchgen.attention.mla import r1_blackwell_prefill
+	_cutlass_prefill = r1_blackwell_prefill.enabled()
 
 	# Default: FP8 act_quant + DeepGEMM fp8_gemm_nt (matches SGLang/DeepGEMM
 	# blockwise FP8 semantics and the decode path's w8a8_deepgemm). Opt into
@@ -1183,6 +1185,8 @@ def mla_prefill_flashattention3_w8a16_deepgemm_prepacked(
 	_gemm = w8a16_gemm_dequant if _w8a16_dequant_path else w8a16_gemm
 	chunk_size = getattr(self, "single_sequence_prefill_chunk_size", 0)
 	if num_sequences == 1 and total_tokens > 262_144 and chunk_size:
+		if _cutlass_prefill:
+			raise ValueError("CUTLASS R1 fresh prefill does not support asymmetric Q chunks")
 		return _mla_prefill_single_sequence_chunked(
 			self, hidden_states, position_ids, max_seqlen,
 			weight_scale, _gemm, chunk_size,
@@ -1282,7 +1286,9 @@ def mla_prefill_flashattention3_w8a16_deepgemm_prepacked(
 	key_states = key_states.contiguous()
 	value_states = value_states.contiguous()
 
-	attn_output = flash_attn_varlen_func(
+	_prefill_attention = (r1_blackwell_prefill.flash_attn_varlen_func
+		if _cutlass_prefill else flash_attn_varlen_func)
+	attn_output = _prefill_attention(
 		query_states,
 		key_states,
 		value_states,
