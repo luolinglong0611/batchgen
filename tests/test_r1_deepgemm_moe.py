@@ -244,3 +244,44 @@ def test_malformed_local_rows_do_not_enter_ep_collective(module):
     with pytest.raises(ValueError, match="BF16"):
         a(torch.ones((1, 512), dtype=torch.float32))
     assert p.dispatches == p.combines == 0
+
+
+def test_prefill_fused_candidate_is_explicit_and_leaves_masked_decode_unchanged(module, monkeypatch):
+    """Exercise real branch selection with tensors; GPU byte math is separate."""
+    from types import ModuleType
+    package_name = "r1_prefill_fused_candidate_contract"
+    package = ModuleType(package_name)
+    package.__path__ = []
+    helper = ModuleType(package_name + ".prefill_silu_quant")
+    calls = []
+    def fused(gateup):
+        calls.append((tuple(gateup.shape), gateup.dtype))
+        rows, twice_n = gateup.shape
+        return (torch.ones((rows, twice_n // 2), dtype=torch.float8_e4m3fn),
+                torch.full((rows, twice_n // 256), .5, dtype=torch.float32))
+    helper.fused_silu_quantize = fused
+    monkeypatch.setitem(sys.modules, package_name, package)
+    monkeypatch.setitem(sys.modules, helper.__name__, helper)
+    monkeypatch.setattr(module, "__package__", package_name)
+    monkeypatch.setattr(module, "__spec__", SimpleNamespace(parent=package_name))
+    monkeypatch.setenv("BATCHGEN_R1_PREFILL_FUSED_SILU_QUANT", "1")
+    expert = math(module)
+    expert.runtime.silu_and_mul = lambda *a, **k: pytest.fail("Separate SiLU ran in selected fused prefill")
+    expert.runtime.quantize = lambda *a, **k: pytest.fail("Separate quant ran in selected fused prefill")
+    expert.contiguous(torch.ones((128, 512), dtype=torch.float8_e4m3fn),
+                      torch.full((128, 4), .5), torch.zeros(128, dtype=torch.int32))
+    assert calls == [((128, 1024), torch.bfloat16)]
+    assert [x[0] for x in expert.runtime.dg.calls] == ["contiguous", "contiguous"]
+    # The separate masked decode method keeps its installed SiLU/quantizer.
+    p = pool()
+    a = adapter(module, p)
+    a(torch.ones((2, 512), dtype=torch.bfloat16))
+    assert len(calls) == 1 and p.dispatches == p.combines == 1
+
+
+def test_prefill_fused_candidate_rejects_unknown_policy(module, monkeypatch):
+    monkeypatch.setenv("BATCHGEN_R1_PREFILL_FUSED_SILU_QUANT", "yes")
+    expert = math(module)
+    with pytest.raises(ValueError, match="must be0 or1"):
+        expert.contiguous(torch.ones((128, 512), dtype=torch.float8_e4m3fn),
+                          torch.full((128, 4), .5), torch.zeros(128, dtype=torch.int32))

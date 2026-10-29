@@ -12,6 +12,7 @@ Keep that bank across prefill/decode phases.  Materializing it alongside the old
 resident expert allocation would duplicate approximately 76 GiB per R1 rank.
 """
 from dataclasses import dataclass
+import os
 import time
 from types import SimpleNamespace
 
@@ -255,10 +256,17 @@ class R1DeepGemmExpertMath:
         gateup = torch.empty((rows, 2 * self.intermediate), dtype=torch.bfloat16, device=x_fp8.device)
         dg.m_grouped_fp8_gemm_nt_contiguous(
             (x_fp8, self._packed_scales(scales)), (bank.w13, bank.w13_scale), gateup, m_indices)
-        down_bf16 = torch.empty((rows, self.intermediate), dtype=torch.bfloat16, device=x_fp8.device)
-        self.runtime.silu_and_mul(gateup, down_bf16)
-        down_fp8, down_scale = self.runtime.quantize(
-            down_bf16, 128, column_major_scales=True, scale_tma_aligned=True, scale_ue8m0=True)
+        fused = os.environ.get("BATCHGEN_R1_PREFILL_FUSED_SILU_QUANT", "0")
+        if fused not in ("0", "1"):
+            raise ValueError("BATCHGEN_R1_PREFILL_FUSED_SILU_QUANT must be0 or1")
+        if fused == "1":
+            from .prefill_silu_quant import fused_silu_quantize
+            down_fp8, down_scale = fused_silu_quantize(gateup)
+        else:
+            down_bf16 = torch.empty((rows, self.intermediate), dtype=torch.bfloat16, device=x_fp8.device)
+            self.runtime.silu_and_mul(gateup, down_bf16)
+            down_fp8, down_scale = self.runtime.quantize(
+                down_bf16, 128, column_major_scales=True, scale_tma_aligned=True, scale_ue8m0=True)
         dg.m_grouped_fp8_gemm_nt_contiguous(
             (down_fp8, self._packed_scales(down_scale)), (bank.w2, bank.w2_scale), out, m_indices)
         return out
