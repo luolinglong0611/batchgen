@@ -84,6 +84,7 @@ class RopeHandoffContract(unittest.TestCase):
         namespace = {'torch': SimpleNamespace(Tensor=Tensor, empty_like=lambda x: Tensor([0] * len(x.indices), x.shape)),
                      'fused_rmsnorm_rope_with_q_kernel': KernelStub(), '_LAYOUT_AUDIT_ENABLED': receipts is not None,
                      'r1_native_rope_fp32_kernel': NativeFP32KernelStub(),
+                     'r1_fused_native_rope_enabled': lambda: False,
                      'triton': SimpleNamespace(next_power_of_2=lambda value: 1 << (value - 1).bit_length()),
                      '_record_layout_call': lambda layout, kv, q: receipts.append((layout, kv.values(), q.values()))}
         return function(KERNEL, 'fused_rmsnorm_rope_with_q', namespace)

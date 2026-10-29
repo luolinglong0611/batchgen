@@ -698,6 +698,13 @@ def r1_native_rope_fp32_kernel(
         tl.store(q_output_ptr + q_base + 2 * pair + 1, q_rot_odd, mask=mask)
 
 
+def r1_fused_native_rope_enabled():
+    value = os.environ.get("BATCHGEN_R1_FUSED_NATIVE_ROPE", "0")
+    if value not in ("0", "1"):
+        raise ValueError("BATCHGEN_R1_FUSED_NATIVE_ROPE must be 0 or 1")
+    return value == "1"
+
+
 def fused_rmsnorm_rope_with_q(
     new_compressed_kv: torch.Tensor,
     q_pe: torch.Tensor,
@@ -719,6 +726,14 @@ def fused_rmsnorm_rope_with_q(
     """
     if output_layout not in ("split_half", "native_interleaved"):
         raise ValueError("Unsupported fused RMSNorm/RoPE output layout")
+    if output_layout == "native_interleaved" and r1_fused_native_rope_enabled():
+        processed_kv = fused_rmsnorm_rope_with_q_r1_fp32(
+            new_compressed_kv, q_pe, cos, sin, position_ids, norm_weight,
+            kv_lora_rank, qk_rope_head_dim, eps,
+        )
+        if _LAYOUT_AUDIT_ENABLED:
+            _record_layout_call(output_layout, processed_kv, q_pe)
+        return processed_kv
     bsz, q_len, total_dim = new_compressed_kv.shape
     assert q_len == 1, "This kernel assumes q_len = 1 for decoding"
     assert total_dim == kv_lora_rank + qk_rope_head_dim
@@ -798,6 +813,28 @@ Q_ROPE_MAX_PAIRS = 256
 #: the launch geometry predicts the optimum, so the policy states the measured
 #: one and leaves the bucket out of it.
 Q_ROPE_BLOCK_H = 4
+
+
+@triton.jit
+def _rotate_native_fp32_separate_rn(even, odd, cosine, sine):
+    # The RMSNorm part of the combined kernel keeps the legacy compiler
+    # fusion settings. PTX makes the RoPE-only separate-FP32 operations
+    # explicit, preventing FMA without changing the latent reduction/math.
+    return tl.inline_asm_elementwise(
+        asm="""{
+            .reg .f32 p0, p1;
+            mul.rn.f32 p0, $2, $4;
+            mul.rn.f32 p1, $3, $5;
+            sub.rn.f32 $0, p0, p1;
+            mul.rn.f32 p0, $2, $5;
+            mul.rn.f32 p1, $3, $4;
+            add.rn.f32 $1, p0, p1;
+        }""",
+        constraints="=f,=f,f,f,f,f",
+        args=[even.to(tl.float32), odd.to(tl.float32),
+              cosine.to(tl.float32), sine.to(tl.float32)],
+        dtype=(tl.float32, tl.float32), is_pure=True, pack=1,
+    )
 
 
 def _next_pow2(value: int) -> int:
@@ -885,6 +922,7 @@ def fused_rmsnorm_rope_with_q_native_kernel(
     BLOCK_SIZE: tl.constexpr,
     BLOCK_H: tl.constexpr,
     BLOCK_PAIRS: tl.constexpr,
+    STRICT_FP32_ROPE: tl.constexpr = False,
 ):
     """Fused RMSNorm + RoPE kernel with NATIVE INTERLEAVED output layout.
 
@@ -979,8 +1017,11 @@ def fused_rmsnorm_rope_with_q_native_kernel(
             other=0.0,
         )
 
-        kv_rot_even = kv_even * cos_i - kv_odd * sin_i
-        kv_rot_odd = kv_even * sin_i + kv_odd * cos_i
+        if STRICT_FP32_ROPE:
+            kv_rot_even, kv_rot_odd = _rotate_native_fp32_separate_rn(kv_even, kv_odd, cos_i, sin_i)
+        else:
+            kv_rot_even = kv_even * cos_i - kv_odd * sin_i
+            kv_rot_odd = kv_even * sin_i + kv_odd * cos_i
 
         # Store at the ORIGINAL interleaved positions (2i, 2i+1), NOT in the
         # split-half layout that the legacy kernel uses.
@@ -1015,8 +1056,12 @@ def fused_rmsnorm_rope_with_q_native_kernel(
         q_even = tl.load(q_pe_ptr + q_even_offsets, mask=tile_mask, other=0.0)
         q_odd = tl.load(q_pe_ptr + q_odd_offsets, mask=tile_mask, other=0.0)
 
-        q_rot_even = q_even * cos_i[None, :] - q_odd * sin_i[None, :]
-        q_rot_odd = q_even * sin_i[None, :] + q_odd * cos_i[None, :]
+        if STRICT_FP32_ROPE:
+            q_rot_even, q_rot_odd = _rotate_native_fp32_separate_rn(
+                q_even, q_odd, cos_i[None, :], sin_i[None, :])
+        else:
+            q_rot_even = q_even * cos_i[None, :] - q_odd * sin_i[None, :]
+            q_rot_odd = q_even * sin_i[None, :] + q_odd * cos_i[None, :]
 
         tl.store(q_pe_ptr + q_even_offsets, q_rot_even, mask=tile_mask)
         tl.store(q_pe_ptr + q_odd_offsets, q_rot_odd, mask=tile_mask)
@@ -1087,6 +1132,36 @@ def fused_rmsnorm_rope_with_q_native(
     )
 
     return processed_kv
+
+
+def fused_rmsnorm_rope_with_q_r1_fp32(
+    new_compressed_kv: torch.Tensor, q_pe: torch.Tensor,
+    cos: torch.Tensor, sin: torch.Tensor, position_ids: torch.Tensor,
+    norm_weight: torch.Tensor, kv_lora_rank: int, qk_rope_head_dim: int,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """One R1 kernel: unchanged latent RMSNorm plus strict FP32 native RoPE.
+
+    Q is rotated inplace from its original even/odd pairs; each head/pair has
+    one writer, and both pair values are loaded before either store. KV stays
+    read-only and the returned contiguous allocation cannot alias an input.
+    No q_orig clone, split-half pass or second rotation is performed.
+    """
+    from .r1_native_rope_contract import validate_native_fp32_inputs
+    rows, heads = validate_native_fp32_inputs(
+        new_compressed_kv, q_pe, cos, sin, position_ids, norm_weight,
+        kv_lora_rank, qk_rope_head_dim, eps, torch=torch,
+    )
+    processed = torch.empty(tuple(new_compressed_kv.shape),
+                            dtype=new_compressed_kv.dtype, device=new_compressed_kv.device)
+    block_h, block_pairs, tiles = select_q_rope_tiling(rows, heads, qk_rope_head_dim // 2)
+    fused_rmsnorm_rope_with_q_native_kernel[(rows, 1 + tiles)](
+        new_compressed_kv, processed, q_pe, cos, sin, position_ids, norm_weight,
+        new_compressed_kv.stride(0), rows, heads, kv_lora_rank, qk_rope_head_dim, eps,
+        BLOCK_SIZE=64, BLOCK_H=block_h, BLOCK_PAIRS=block_pairs, STRICT_FP32_ROPE=True,
+        num_warps=4, enable_fp_fusion=True,
+    )
+    return processed
 
 @triton.jit
 def fused_rmsnorm_rope_cache_update_with_q_return_new_kv_kernel(
